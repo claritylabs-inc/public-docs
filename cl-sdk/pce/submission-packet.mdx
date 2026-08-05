@@ -1,0 +1,174 @@
+---
+title: "Generating PCE Submission Packets for Carriers"
+sidebarTitle: "Submission Packet"
+description: "Generate carrier-ready PCE submission packets, run quality gate checks, and work through the review checklist before handing off to a licensed professional."
+---
+
+A `PceSubmissionPacket` bundles everything a licensed reviewer needs to assess a policy change request: the normalized change items, generated carrier artifacts, validation issues, missing-info questions, and a creation timestamp. You generate one after the PCE state machine has run to completion and all blocking issues are resolved.
+
+## Generating a Packet
+
+You can generate a packet in two ways — through the agent instance or by calling the standalone builder directly.
+
+<CodeGroup>
+
+```typescript Agent method
+// Using the agent instance (recommended for most workflows)
+const packet = pce.generateSubmissionPacket({ state });
+```
+
+```typescript Standalone builder
+import { buildPceSubmissionPacket } from "@claritylabs/cl-sdk";
+
+// Pass state and a Unix timestamp (milliseconds)
+const packet = buildPceSubmissionPacket(state, Date.now());
+```
+
+</CodeGroup>
+
+Both produce an identical `PceSubmissionPacket`. Use the standalone builder when you need to generate packets outside the agent lifecycle — for example, in a background job or when reconstructing a packet from a persisted state.
+
+---
+
+## Packet Structure
+
+```typescript
+interface PceSubmissionPacket {
+  id: string;
+  caseId: string;
+  pceCase: PceCaseState;
+  artifacts: CasePacketArtifact[];
+  validationIssues: CaseValidationIssue[];
+  missingInfoQuestions: PceMissingInfoQuestion[];
+  createdAt: number;
+}
+```
+
+<ResponseField name="id" type="string">
+  Deterministic packet ID derived from the case ID and creation timestamp. Safe for deduplication across retries.
+</ResponseField>
+
+<ResponseField name="caseId" type="string">
+  The case ID you provided when calling `processChangeRequest()`.
+</ResponseField>
+
+<ResponseField name="pceCase" type="PceCaseState">
+  The complete case state snapshot at the time of packet generation. Includes `items`, `impacts`, `evidenceSources`, `executionMode`, and all validation context.
+</ResponseField>
+
+<ResponseField name="artifacts" type="CasePacketArtifact[]">
+  Generated carrier artifacts. A complete packet typically includes:
+
+  | Artifact type | Description |
+  |---|---|
+  | `underwriter_summary` | Human-readable summary of all changes and their policy impact |
+  | `email_draft` | Carrier intake email pre-populated with change details |
+  | `missing_info_request` | Formatted request for any still-outstanding information |
+  | `json_packet` | Machine-readable JSON of all normalized change items |
+  | `validation_report` | Full validation issue list with severity and field references |
+</ResponseField>
+
+<ResponseField name="validationIssues" type="CaseValidationIssue[]">
+  Top-level validation issues surfaced from `pceCase.validationIssues`. Blocking issues here indicate the packet is not yet submission-ready.
+</ResponseField>
+
+<ResponseField name="missingInfoQuestions" type="PceMissingInfoQuestion[]">
+  Outstanding questions at packet generation time. If this list is non-empty, the packet is considered incomplete.
+</ResponseField>
+
+<ResponseField name="createdAt" type="number">
+  Unix timestamp (milliseconds) when the packet was built.
+</ResponseField>
+
+---
+
+## Running a Quality Report
+
+Before presenting a packet for review, run `buildPceQualityReport()` to get a structured assessment of submission readiness.
+
+```typescript
+import { buildPceQualityReport } from "@claritylabs/cl-sdk";
+
+const report = buildPceQualityReport(state);
+
+if (report.qualityGateStatus === "failed") {
+  // Keep the case in draft and surface blocking issues to the user.
+  console.log(report.blockingIssues);
+}
+```
+
+<ResponseField name="qualityGateStatus" type='"passed" | "passed_with_warnings" | "failed"'>
+  Overall readiness signal. `"passed"` means no blocking issues and no missing-info questions. `"passed_with_warnings"` means warnings exist but the case can proceed to review. `"failed"` means blocking issues or missing info must be resolved first.
+</ResponseField>
+
+<ResponseField name="blockingIssues" type="CaseValidationIssue[]">
+  Subset of `validationIssues` with `severity === "blocking"`. Each issue includes an `itemId`, `fieldPath`, and human-readable `message`.
+</ResponseField>
+
+<ResponseField name="warningIssues" type="CaseValidationIssue[]">
+  Issues with `severity === "warning"` that a reviewer should assess but that do not block submission.
+</ResponseField>
+
+<ResponseField name="missingInfoCount" type="number">
+  Number of unresolved missing-info questions at report time.
+</ResponseField>
+
+<ResponseField name="citationCoverage" type="number">
+  Fraction of change items that have at least one verified citation (0–1). Low coverage suggests the evidence retrieval step found limited supporting text.
+</ResponseField>
+
+---
+
+## Review Checklist
+
+Work through this checklist before treating a packet as ready to hand off to a carrier.
+
+<Steps>
+  <Step title="Verify change items">
+    Confirm that every `PolicyChangeItem` in `packet.pceCase.items` has the expected `action` (`add` | `modify` | `remove`), the correct `fieldPath`, and a `proposedValue` that matches what was requested. Flag any items where the model mis-parsed the intent.
+  </Step>
+
+  <Step title="Check required details">
+    Ensure that all carrier-required fields are present — typically effective date, vehicle information (for auto endorsements), named insured details, and policy number. Check `packet.missingInfoQuestions` for any fields the agent flagged as absent.
+  </Step>
+
+  <Step title="Verify citations">
+    For each item, confirm that `citations[n].quote` is genuinely present in the referenced source text. Open `packet.pceCase.evidenceSources` and locate the `sourceId` referenced by each citation. Mismatched quotes indicate a grounding failure.
+  </Step>
+
+  <Step title="Resolve blocking validation issues">
+    Open `packet.validationIssues`, filter to `severity === "blocking"`, and either resolve each issue or document an intentional override with a reason before sending to the carrier.
+  </Step>
+
+  <Step title="Review the carrier email artifact">
+    Find the `email_draft` artifact in `packet.artifacts`. Confirm that the tone, format, and field values match the carrier's requested intake format. Edit the draft as needed before sending.
+  </Step>
+</Steps>
+
+<Warning>
+  Never send the `email_draft` artifact to a carrier without a licensed user reviewing it first. The SDK generates draft content based on parsed evidence — it is not a substitute for professional judgment on coverage changes.
+</Warning>
+
+---
+
+## Accessing Individual Artifacts
+
+Artifacts are stored as an array. Filter by `type` to retrieve a specific one:
+
+```typescript
+const emailDraft = packet.artifacts.find(
+  (artifact) => artifact.type === "email_draft",
+);
+
+const validationReport = packet.artifacts.find(
+  (artifact) => artifact.type === "validation_report",
+);
+
+if (emailDraft) {
+  console.log(emailDraft.content); // Plain text or Markdown content
+}
+```
+
+<Tip>
+  The `json_packet` artifact contains a serialised version of all normalized change items. You can parse and import this into your carrier portal or internal record system if it accepts structured JSON intake.
+</Tip>

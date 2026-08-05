@@ -1,0 +1,299 @@
+---
+title: "Wiring CL Pipelines with Convex"
+sidebarTitle: "Convex"
+description: "Step-by-step guide to connecting cl-pipelines to Convex using pipelineFields, createConvexStorageAdapter, and createConvexSchedulerAdapter."
+---
+
+The `@claritylabs/cl-pipelines/convex` sub-path export ships pre-built adapters for Convex's storage and scheduler APIs. You define the five pipeline mutations in your Convex backend, then pass them to `createConvexStorageAdapter` — the adapters handle serialization, scheduling, and the `advancePhase` wiring automatically.
+
+## Installation
+
+```bash
+npm install @claritylabs/cl-pipelines zod ai
+```
+
+Import the Convex-specific helpers from the sub-path:
+
+```typescript
+import {
+  pipelineFields,
+  createConvexStorageAdapter,
+  createConvexSchedulerAdapter,
+} from "@claritylabs/cl-pipelines/convex";
+```
+
+## Setup
+
+<Steps>
+
+### Add pipeline fields to your schema
+
+Use `pipelineFields()` to add the four required columns to any Convex table. Spread it inside `defineTable`:
+
+```typescript
+// convex/schema.ts
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+import { pipelineFields } from "@claritylabs/cl-pipelines/convex";
+
+export default defineSchema({
+  applications: defineTable({
+    applicantName: v.string(),
+    submittedAt: v.number(),
+    ...pipelineFields(),
+    // Adds: pipelineStatus, pipelineError, pipelineCheckpoint, pipelineLog
+  }),
+});
+```
+
+### Implement the five pipeline mutations
+
+Create an internal mutation file (e.g. `convex/applications.ts`) with the five methods your `StorageAdapter` needs. Each mutation maps to one `StorageAdapter` method.
+
+<CodeGroup>
+
+```typescript getJob
+export const getJob = internalQuery({
+  args: { jobId: v.string() },
+  handler: async (ctx, { jobId }) => {
+    const doc = await ctx.db.get(jobId as any);
+    if (!doc) return null;
+    return {
+      status: doc.pipelineStatus,
+      checkpoint: doc.pipelineCheckpoint ?? null,
+      error: doc.pipelineError,
+    };
+  },
+});
+```
+
+```typescript setStatus
+export const setStatus = internalMutation({
+  args: {
+    jobId: v.string(),
+    status: v.union(
+      v.literal("idle"),
+      v.literal("running"),
+      v.literal("paused"),
+      v.literal("complete"),
+      v.literal("error")
+    ),
+    error: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, { jobId, status, error }) => {
+    await ctx.db.patch(jobId as any, {
+      pipelineStatus: status,
+      pipelineError: error ?? undefined, // clears on null — REQUIRED
+    });
+  },
+});
+```
+
+```typescript setCheckpoint
+export const setCheckpoint = internalMutation({
+  args: { jobId: v.string(), checkpoint: v.union(v.any(), v.null()) },
+  handler: async (ctx, { jobId, checkpoint }) => {
+    await ctx.db.patch(jobId as any, {
+      pipelineCheckpoint: checkpoint ?? undefined,
+    });
+  },
+});
+```
+
+```typescript appendLog
+export const appendLog = internalMutation({
+  args: {
+    jobId: v.string(),
+    entry: v.object({
+      timestamp: v.number(),
+      message: v.string(),
+      phase: v.optional(v.string()),
+      level: v.optional(v.union(v.literal("info"), v.literal("warn"), v.literal("error"))),
+    }),
+  },
+  handler: async (ctx, { jobId, entry }) => {
+    const doc = await ctx.db.get(jobId as any);
+    if (!doc) return;
+    const log = doc.pipelineLog ?? [];
+    await ctx.db.patch(jobId as any, { pipelineLog: [...log, entry] });
+  },
+});
+```
+
+```typescript clearLog
+export const clearLog = internalMutation({
+  args: { jobId: v.string() },
+  handler: async (ctx, { jobId }) => {
+    await ctx.db.patch(jobId as any, { pipelineLog: [] });
+  },
+});
+```
+
+</CodeGroup>
+
+<Warning>
+  The `setStatus` mutation **must** always patch `pipelineError: error ?? undefined`. When `error` is `null`, you must clear the field. If you skip this patch, stale error messages will survive retries and appear in your UI even after a successful run.
+</Warning>
+
+### Create the advance action
+
+Create an `internalAction` that constructs both adapters and calls `advancePhase`. This is the function Convex's scheduler will call after each phase:
+
+```typescript
+// convex/applications.ts
+import { internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { v } from "convex/values";
+import { advancePhase } from "@claritylabs/cl-pipelines";
+import { createConvexStorageAdapter, createConvexSchedulerAdapter } from "@claritylabs/cl-pipelines/convex";
+import type { AgentCheckpoint } from "@claritylabs/cl-pipelines";
+import { phases } from "./pipeline"; // your phase definitions
+
+export const advance = internalAction({
+  args: { jobId: v.string() },
+  handler: async (ctx, { jobId }) => {
+    const mutations = {
+      getJob: internal.applications.getJob,
+      setStatus: internal.applications.setStatus,
+      setCheckpoint: internal.applications.setCheckpoint,
+      appendLog: internal.applications.appendLog,
+      clearLog: internal.applications.clearLog,
+    };
+
+    const storage = createConvexStorageAdapter<AgentCheckpoint>({ ctx, mutations });
+    const scheduler = createConvexSchedulerAdapter({
+      ctx,
+      advanceAction: internal.applications.advance,
+    });
+
+    await advancePhase({ jobId, phases, storage, scheduler });
+  },
+});
+```
+
+### Start a job from a public action
+
+Call `runPipeline` from a Convex `action` (not a mutation — `runPipeline` calls `scheduleAdvance`, which requires action context):
+
+```typescript
+import { action } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { v } from "convex/values";
+import { runPipeline } from "@claritylabs/cl-pipelines";
+import { createConvexStorageAdapter, createConvexSchedulerAdapter } from "@claritylabs/cl-pipelines/convex";
+import type { AgentCheckpoint } from "@claritylabs/cl-pipelines";
+
+export const startJob = action({
+  args: { jobId: v.string(), userMessage: v.string() },
+  handler: async (ctx, { jobId, userMessage }) => {
+    const mutations = {
+      getJob: internal.applications.getJob,
+      setStatus: internal.applications.setStatus,
+      setCheckpoint: internal.applications.setCheckpoint,
+      appendLog: internal.applications.appendLog,
+      clearLog: internal.applications.clearLog,
+    };
+
+    const storage = createConvexStorageAdapter<AgentCheckpoint>({ ctx, mutations });
+    const scheduler = createConvexSchedulerAdapter({
+      ctx,
+      advanceAction: internal.applications.advance,
+    });
+
+    await runPipeline<AgentCheckpoint>({
+      jobId,
+      phases,
+      storage,
+      scheduler,
+      initialState: {
+        messages: [{ role: "user", content: userMessage }],
+        pendingToolCalls: [],
+        turn: 0,
+      },
+    });
+  },
+});
+```
+
+### Add a retry action
+
+Expose a retry action that accepts a `mode` argument so your UI can trigger both `"resume"` and `"full"` retries:
+
+```typescript
+export const retryJob = action({
+  args: {
+    jobId: v.string(),
+    mode: v.union(v.literal("resume"), v.literal("full")),
+    userMessage: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const mutations = {
+      getJob: internal.applications.getJob,
+      setStatus: internal.applications.setStatus,
+      setCheckpoint: internal.applications.setCheckpoint,
+      appendLog: internal.applications.appendLog,
+      clearLog: internal.applications.clearLog,
+    };
+
+    const storage = createConvexStorageAdapter<AgentCheckpoint>({ ctx, mutations });
+    const scheduler = createConvexSchedulerAdapter({
+      ctx,
+      advanceAction: internal.applications.advance,
+    });
+
+    await runPipeline<AgentCheckpoint>({
+      jobId: args.jobId,
+      phases,
+      storage,
+      scheduler,
+      retryMode: args.mode,
+      initialState: {
+        messages: [{ role: "user", content: args.userMessage }],
+        pendingToolCalls: [],
+        turn: 0,
+      },
+    });
+  },
+});
+```
+
+</Steps>
+
+## createConvexStorageAdapter
+
+```typescript
+createConvexStorageAdapter<TState>({
+  ctx: ActionCtx,
+  mutations: ConvexPipelineMutations,
+}): StorageAdapter<TState>
+```
+
+<ParamField path="ctx" type="ActionCtx" required>
+  The Convex action context (`ctx`) from your `internalAction` or `action` handler.
+</ParamField>
+
+<ParamField path="mutations" type="ConvexPipelineMutations" required>
+  A record mapping the five pipeline mutation names to their `internal.*` references. Import `ConvexPipelineMutations` type from `@claritylabs/cl-pipelines/convex` for type-safe wiring.
+</ParamField>
+
+## createConvexSchedulerAdapter
+
+```typescript
+createConvexSchedulerAdapter({
+  ctx: ActionCtx,
+  advanceAction: FunctionReference<"action">,
+  jobIdArgName?: string,  // default: "jobId"
+}): SchedulerAdapter
+```
+
+<ParamField path="ctx" type="ActionCtx" required>
+  The Convex action context.
+</ParamField>
+
+<ParamField path="advanceAction" type="FunctionReference<'action'>" required>
+  The `internal.*` reference to your `advance` action (e.g. `internal.applications.advance`).
+</ParamField>
+
+<ParamField path="jobIdArgName" type="string">
+  The argument name your advance action uses for the job ID. Defaults to `"jobId"`.
+</ParamField>

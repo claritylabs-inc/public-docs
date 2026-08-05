@@ -1,0 +1,139 @@
+---
+title: "Policy Classification with ACORD LOB Codes"
+sidebarTitle: "Classification"
+description: "Learn how CL SDK 4.0 classifies insurance policies using ACORD lines-of-business codes returned as part of the source-backed operational profile."
+---
+
+In CL SDK 4.0, policy classification is no longer a standalone step. Instead, the `linesOfBusiness` field inside the `PolicyOperationalProfile` carries ACORD LOB codes extracted alongside every other policy fact — in the same bounded, source-cited generation call that produces coverage units, dates, and premium. This means classification evidence is traceable to specific source nodes just like any other extracted value.
+
+## How Classification Works
+
+The extraction pipeline populates `linesOfBusiness` as an array of `AcordLobCode` values. A single policy can return multiple codes when the document covers a package program.
+
+```typescript
+interface PolicyOperationalProfile {
+  documentType: "policy" | "quote";
+  linesOfBusiness: AcordLobCode[];  // e.g. ["CGL", "AUTOB"]
+  // ... other fields
+}
+```
+
+<Note>
+  `linesOfBusiness` intentionally accepts multiple codes. A commercial package policy covering general liability and business auto will return `["CGL", "AUTOB"]` — do not reduce it to a single value in your application unless you have a specific reason to do so.
+</Note>
+
+## Legacy-to-ACORD Code Mapping
+
+If you are migrating from an earlier version of the SDK, the table below maps every legacy `policyType` string to its corresponding ACORD code or codes.
+
+| Legacy value | ACORD code(s) |
+|---|---|
+| `general_liability` | `CGL` |
+| `commercial_property` | `PROPC` |
+| `commercial_auto`, `non_owned_auto` | `AUTOB` |
+| `workers_comp` | `WORK` |
+| `umbrella` | `UMBRC` |
+| `excess_liability` | `EXLIA` |
+| `professional_liability` | `EO` |
+| `cyber`, `environmental`, `product_liability` | `OLIB` |
+| `management_liability_package` | `DO`, `EPLI`, `FIDUC` |
+| `homeowners_ho3`, `homeowners_ho5` | `HOME` |
+| `renters_ho4`, `condo_ho6` | `HOME` |
+| `flood_nfip`, `flood_private` | `FLOOD` |
+| `life`, `other` | `UN` |
+
+<Warning>
+  The legacy `policyType` string field is deprecated and will be removed in a future major version. Migrate your code to read `linesOfBusiness` from the operational profile instead.
+</Warning>
+
+## Exported Utilities
+
+Import all classification utilities from the `policy-taxonomy` subpath:
+
+```typescript
+import {
+  AcordLobCodeSchema,
+  ACORD_LOB_CODES,
+  ACORD_LOB_LABELS,
+  LEGACY_POLICY_TYPE_TO_LOB,
+  normalizeOperationalLinesOfBusiness,
+  resolveOperationalProfileLinesOfBusiness,
+  PERSONAL_LOB_CODES,
+} from "@claritylabs/cl-sdk/policy-taxonomy";
+```
+
+<CardGroup cols={2}>
+  <Card title="AcordLobCodeSchema" icon="shield-check">
+    A Zod enum containing all 107 ACORD LOB codes. Use it to validate user input or parse external data before passing it into your application logic.
+  </Card>
+  <Card title="ACORD_LOB_CODES" icon="list">
+    A plain array of all 107 ACORD LOB code strings. Useful for populating dropdowns or building filter sets.
+  </Card>
+  <Card title="ACORD_LOB_LABELS" icon="tag">
+    A `Record<AcordLobCode, string>` map from code to human-readable label. Use this to display friendly names in your UI.
+  </Card>
+  <Card title="LEGACY_POLICY_TYPE_TO_LOB" icon="arrows-rotate">
+    Maps every legacy `policyType` string to one or more ACORD codes. Use this during a migration to translate stored legacy values.
+  </Card>
+</CardGroup>
+
+### Utility Functions
+
+<Tabs>
+  <Tab title="normalizeOperationalLinesOfBusiness">
+    Accepts an array of raw LOB strings — which may be legacy values, ACORD codes, or mixed — and returns a deduplicated array of valid `AcordLobCode` values.
+
+    ```typescript
+    import { normalizeOperationalLinesOfBusiness } from "@claritylabs/cl-sdk/policy-taxonomy";
+
+    const codes = normalizeOperationalLinesOfBusiness(["general_liability", "CGL", "AUTOB"]);
+    // ["CGL", "AUTOB"]
+    ```
+  </Tab>
+  <Tab title="resolveOperationalProfileLinesOfBusiness">
+    Reads the `linesOfBusiness` field from a `PolicyOperationalProfile` and returns the resolved, normalized code array. Use this when you receive a profile object and want a clean code list without manual normalization.
+
+    ```typescript
+    import { resolveOperationalProfileLinesOfBusiness } from "@claritylabs/cl-sdk/policy-taxonomy";
+
+    const codes = resolveOperationalProfileLinesOfBusiness(operationalProfile);
+    // ["CGL", "AUTOB"]
+    ```
+  </Tab>
+  <Tab title="PERSONAL_LOB_CODES">
+    A `Set<AcordLobCode>` containing all personal lines codes. Use it to branch logic between personal and commercial policies.
+
+    ```typescript
+    import { PERSONAL_LOB_CODES } from "@claritylabs/cl-sdk/policy-taxonomy";
+
+    const isPersonal = codes.some((c) => PERSONAL_LOB_CODES.has(c));
+    ```
+  </Tab>
+</Tabs>
+
+## Full Classification Example
+
+The following example runs extraction and then reads the resulting LOB codes with a human-readable label for each:
+
+```typescript
+import { createExtractor } from "@claritylabs/cl-sdk";
+import {
+  ACORD_LOB_LABELS,
+  resolveOperationalProfileLinesOfBusiness,
+} from "@claritylabs/cl-sdk/policy-taxonomy";
+
+const extractor = createExtractor({ generateObject });
+const result = await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
+
+const codes = resolveOperationalProfileLinesOfBusiness(result.operationalProfile!);
+
+for (const code of codes) {
+  console.log(`${code}: ${ACORD_LOB_LABELS[code]}`);
+}
+// CGL: Commercial General Liability
+// AUTOB: Business Auto
+```
+
+<Tip>
+  Store the raw `AcordLobCode[]` array in your database rather than labels or legacy strings. Labels may be updated in future SDK versions, but code values are stable ACORD-defined identifiers.
+</Tip>

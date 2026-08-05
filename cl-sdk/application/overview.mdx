@@ -1,0 +1,205 @@
+---
+title: "Insurance Application Processing Pipeline"
+sidebarTitle: "Overview"
+description: "Process insurance application PDFs end-to-end with an agentic pipeline that extracts fields, auto-fills from context, batches questions, and maps a final PDF."
+---
+
+The CL SDK application pipeline takes a raw insurance application PDF and carries it through a fully agentic process — classifying the document, extracting every fillable field, auto-filling what it can from your organization's context and connected policy records, grouping remaining questions into focused email batches, and mapping a final completed PDF once all answers are in. Each phase uses a purpose-built focused agent sized for its task so you don't burn large-model tokens on lightweight classification work.
+
+## Pipeline Phases
+
+<Steps>
+  <Step title="Classify">
+    A small, fast classifier (approximately 512 tokens) determines whether the uploaded PDF is actually an insurance application form. Non-application PDFs — certificates of insurance, loss runs, endorsements — are rejected early before any expensive extraction work runs.
+  </Step>
+
+  <Step title="Extract Fields">
+    A field extractor processes the full document and returns a structured list of every fillable field: label, type, current value (if pre-filled), required status, and section grouping. This is the largest phase at approximately 8,192 tokens.
+  </Step>
+
+  <Step title="Plan Optional Fill Actions">
+    The planner reviews the extracted fields and decides which of four optional fill strategies to run in parallel: **vector backfill** (similarity search against stored records), **context auto-fill** (matching fields to your `orgContext` key/value pairs), **document search** (pulling data from connected policy documents), and **batching** (grouping remaining fields for email collection).
+  </Step>
+
+  <Step title="Backfill, Auto-Fill, and Search">
+    The selected fill strategies run in parallel. Each strategy writes its proposed values back to the field list with a confidence score and provenance reference. Higher-confidence fills from one strategy can override lower-confidence fills from another.
+  </Step>
+
+  <Step title="Batch Questions">
+    Fields that remain unfilled after auto-fill are grouped into 3–8 topic-based batches by the batcher agent. Batches keep related questions together — general business info in one batch, coverage specifics in another — so the emails you send are coherent and easy for a client to answer.
+  </Step>
+
+  <Step title="Reply Loop">
+    For each batch, the pipeline generates an outbound email, waits for a reply, classifies the reply intent (direct answers, a lookup request, or a clarification), and routes it to the appropriate sub-agent: `answer-parser`, `lookup-filler`, or `explain`. When all fields in a batch are filled, the pipeline advances to the next batch.
+  </Step>
+
+  <Step title="Confirm and Map PDF">
+    Once all batches are complete, the pipeline generates a confirmation summary for the applicant's review. After confirmation, it maps field values onto the original PDF using AcroForm population or a text overlay, producing the final completed document.
+  </Step>
+</Steps>
+
+---
+
+## Quick Start
+
+```typescript
+import { createApplicationPipeline } from "@claritylabs/cl-sdk";
+
+const pipeline = createApplicationPipeline({
+  generateText,
+  generateObject,
+  applicationStore,
+  documentStore,
+  memoryStore,
+  orgContext: [
+    { key: "company_name", value: "Acme Corp", category: "company_info" },
+    { key: "company_address", value: "123 Main St", category: "company_info" },
+  ],
+});
+
+// Process a new application PDF
+const { state } = await pipeline.processApplication({
+  pdfBase64: "...",
+  applicationId: "app-123",
+  sourceSpans,
+});
+
+// Generate the outbound email for the current batch of questions
+const { text: emailBody } = await pipeline.generateCurrentBatchEmail("app-123");
+
+// Process the client's reply
+const { fieldsFilled, responseText } = await pipeline.processReply({
+  applicationId: "app-123",
+  replyText: "1. Yes\n2. $1,000,000\n3. Check our website",
+});
+```
+
+<Note>
+  `orgContext` key/value pairs drive the context auto-fill phase. The more complete your `orgContext`, the more fields get filled automatically before the first email batch goes out.
+</Note>
+
+---
+
+## Focused Agents
+
+The pipeline composes a set of focused, single-responsibility agents. Each is sized for its task to keep token usage predictable.
+
+| Agent | Task | Typical tokens |
+|---|---|---|
+| `classifier` | Detect if PDF is an insurance application | 512 |
+| `field-extractor` | Extract all form fields from the document | 8,192 |
+| `auto-filler` | Match extracted fields to business context | 4,096 |
+| `batcher` | Group unfilled fields into topic-based batches | 2,048 |
+| `reply-router` | Classify incoming reply intent | 1,024 |
+| `answer-parser` | Extract structured answers from reply text | 4,096 |
+| `lookup-filler` | Fill fields from policy or record lookups | 4,096 |
+| `email-generator` | Generate outbound batch question emails | 2,048 |
+
+---
+
+## Application Status Flow
+
+The pipeline advances `state.status` through a defined sequence. You can check status at any point to understand where in the pipeline an application is.
+
+```
+classifying → extracting → auto_filling → batching → collecting
+    → confirming → mapping → packet_ready / submitted / complete
+```
+
+<ResponseField name="classifying" type="status">
+  PDF is being evaluated to confirm it is an insurance application.
+</ResponseField>
+
+<ResponseField name="extracting" type="status">
+  All fillable fields are being extracted from the document.
+</ResponseField>
+
+<ResponseField name="auto_filling" type="status">
+  Backfill, context auto-fill, and document search strategies are running in parallel.
+</ResponseField>
+
+<ResponseField name="batching" type="status">
+  Remaining unfilled fields are being grouped into topic batches.
+</ResponseField>
+
+<ResponseField name="collecting" type="status">
+  The reply loop is active. Batches are being sent and responses processed.
+</ResponseField>
+
+<ResponseField name="confirming" type="status">
+  All batches complete. A confirmation summary has been sent for applicant review.
+</ResponseField>
+
+<ResponseField name="mapping" type="status">
+  Confirmed field values are being written onto the PDF.
+</ResponseField>
+
+<ResponseField name="packet_ready" type="status">
+  Completed PDF and supporting artifacts are ready for submission.
+</ResponseField>
+
+<ResponseField name="submitted / complete" type="status">
+  Application has been submitted or marked complete by your workflow.
+</ResponseField>
+
+---
+
+## Question Graph Helpers
+
+For advanced workflows, you can extract a question graph from the application fields and use it to plan which questions to ask next based on dependencies and completion state.
+
+```typescript
+import {
+  extractQuestionGraphFromFields,
+  getActiveApplicationFields,
+  planNextApplicationQuestions,
+} from "@claritylabs/cl-sdk";
+
+// Build a dependency graph from the extracted fields
+const graph = extractQuestionGraphFromFields(state.fields, {
+  id: "template-1:graph",
+  title: state.title,
+});
+
+// Plan the next set of questions based on current fill state
+const next = planNextApplicationQuestions({
+  ...state,
+  questionGraph: graph,
+});
+```
+
+<Tip>
+  `planNextApplicationQuestions()` respects field dependencies — it won't schedule a question about a sub-limit until the parent coverage question has been answered. Use this when building a step-by-step form UI instead of the email-reply loop.
+</Tip>
+
+---
+
+## Pipeline Configuration
+
+<ParamField path="generateText" type="GenerateTextFn" required>
+  Text generation function used by the email generator and confirmation agents.
+</ParamField>
+
+<ParamField path="generateObject" type="GenerateObjectFn" required>
+  Structured generation function used by the classifier, extractor, batcher, and reply router.
+</ParamField>
+
+<ParamField path="applicationStore" type="ApplicationStore" required>
+  Persistence store for application state. The pipeline reads and writes state here at each phase.
+</ParamField>
+
+<ParamField path="documentStore" type="DocumentStore" required>
+  Store used by the `lookup-filler` agent to search policy records during document search fill.
+</ParamField>
+
+<ParamField path="memoryStore" type="MemoryStore" required>
+  Conversation memory store used to maintain context across the reply loop.
+</ParamField>
+
+<ParamField path="orgContext" type="OrgContextEntry[]">
+  Key/value pairs describing your organization — company name, address, industry, NAICS code, etc. Used by the `auto-filler` agent to pre-populate common fields.
+</ParamField>
+
+<ParamField path="onProgress" type="(message: string) => void">
+  Optional callback fired at each phase transition with a human-readable status message.
+</ParamField>

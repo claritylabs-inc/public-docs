@@ -1,0 +1,156 @@
+---
+title: "CL Sync Core Concepts: Store, Scope, and Outbox"
+sidebarTitle: "Concepts"
+description: "Understand how CL Sync scopes data per user, manages collections, runs optimistic mutations, and survives page reloads with a durable outbox."
+---
+
+CL Sync is built around a small set of composable ideas. Once you understand how scope, collections, the store, and the outbox fit together, the rest of the API follows naturally. This page explains each concept and how they relate.
+
+## Scope
+
+Every store is tied to a **scope** — a set of identifiers that uniquely describe the current session context:
+
+```typescript
+interface SyncScope {
+  appId: string;        // required — your application's unique identifier
+  environment?: string; // e.g. "production" or import.meta.env.MODE
+  userId?: string;      // the authenticated user's ID
+  orgId?: string;       // an organization or workspace ID
+}
+```
+
+CL Sync calls `createScopeKey(scope)` to produce a composite string key in the form `"appId:env:userId:orgId"`. That key names the IndexedDB database for this scope. Changing any part of the scope — for example, switching `userId` after a logout/login — creates a completely separate IndexedDB scope. You never have to manually clear data when users switch.
+
+```typescript
+import { createScopeKey } from "@claritylabs/cl-sync";
+
+createScopeKey({ appId: "my-app", environment: "prod", userId: "u-1", orgId: "o-1" });
+// → "my-app:prod:u-1:o-1"
+```
+
+<Note>
+  If `userId` or `orgId` are omitted, their segment in the scope key is an empty string. For single-user apps without auth, omitting both is fine.
+</Note>
+
+## Collections
+
+A **collection** is a named set of records with configurable persistence and query behavior. You define collections with `defineCollection`:
+
+```typescript
+interface CollectionDefinition<TRecord, TArgs = unknown> {
+  name: string;
+  getId?: (record: TRecord) => SyncId;
+  persist?: boolean;            // default: true
+  staleMs?: number;
+  redactBeforePersist?: (record: TRecord) => TRecord | null;
+  sort?: (a: TRecord, b: TRecord) => number;
+  deriveKey?: (args: TArgs) => string;
+}
+```
+
+Key behaviors:
+
+- **`persist`** — set to `false` to keep records in memory only (useful for transient UI state).
+- **`deriveKey`** — turns query arguments into a stable cache key. Records fetched for `{ orgId: "org-1" }` are stored independently from records for `{ orgId: "org-2" }`.
+- **`redactBeforePersist`** — called before writing to IndexedDB. Return a sanitized copy to strip sensitive fields, or `null` to skip persistence for that record entirely.
+- **`staleMs`** — marks a collection state as stale after this many milliseconds, signalling that a fresh server fetch is needed.
+
+## SyncStore
+
+The `SyncStore` is the central object. You create it once with `createSyncStore` and share it across your component tree via `SyncProvider`. Its main responsibilities are:
+
+| Responsibility | Methods |
+|---|---|
+| Lifecycle | `hydrate()`, `clearScope()` |
+| Reading | `getCollection()`, `getRecord()`, `getCollectionState()`, `getStatus()` |
+| Writing | `upsertCollection()`, `patchRecord()` |
+| Mutations | `enqueueMutation()`, `registerMutation()`, `flushPendingMutations()` |
+| Subscriptions | `subscribe()`, `emit()` |
+| Schema | `getSchema()`, `getMeta()` |
+
+Calling `store.hydrate()` loads all persisted records from IndexedDB, runs any pending migrations, and sets `status.hydrated = true`. All hook subscriptions re-render at this point.
+
+## Outbox
+
+The **outbox** is CL Sync's durability mechanism. Every time you call `store.enqueueMutation()`, the following happens in order:
+
+1. The mutation's `reducer` runs immediately, applying an optimistic local state change.
+2. The mutation arguments are written to the outbox table in IndexedDB.
+3. The mutation's `flush` function is called to send the change to your server.
+
+Because step 2 happens before step 3, a mutation that fails (network error, browser close) survives and can be retried. Each outbox entry tracks its state:
+
+```typescript
+interface OutboxItem<TArgs> {
+  id: string;
+  mutation: string;           // mutation name, used to look up the definition on replay
+  args: TArgs;
+  scopeKey: string;
+  status: "pending" | "flushing" | "failed";
+  createdAt: number;
+  updatedAt: number;
+  attempts: number;
+  lastError?: string;
+}
+```
+
+On the next page load, `store.hydrate()` restores pending outbox items. After registering your mutation definitions, call `store.flushPendingMutations()` to retry them.
+
+<Warning>
+  Registering mutations before calling `flushPendingMutations` is essential. Any outbox item whose `mutation` name doesn't match a registered definition is skipped with `reason: "missing_definition"`.
+</Warning>
+
+## SyncStatus
+
+`store.getStatus()` (and the `useSyncStatus()` hook) returns a live snapshot of sync state:
+
+```typescript
+interface SyncStatus {
+  hydrated: boolean;       // true once hydrate() resolves
+  hydrating: boolean;      // true while hydrate() is in progress
+  online: boolean;         // reflects navigator.onLine
+  pendingMutations: number; // count of pending + flushing outbox items
+  lastSyncAt?: number;     // timestamp of last successful upsertCollection call
+  lastError?: string;      // most recent error from a failed flush
+}
+```
+
+Use `hydrated` to gate your UI — until it's `true`, records are not yet available from IndexedDB.
+
+## Optimistic updates
+
+When you define a `reducer` on a mutation, it runs **synchronously and immediately** when `enqueueMutation` is called. Your UI updates before any network request is made. If the `flush` call fails, you implement rollback logic in `onReject`:
+
+```typescript
+defineMutation({
+  name: "todos.complete",
+  reducer: (store, args) => {
+    store.patchRecord("todos", args.id, { completed: true });
+  },
+  flush: async (args) => { /* ... */ },
+  onReject: (store, args) => {
+    // Undo the optimistic patch
+    store.patchRecord("todos", args.id, { completed: false });
+  },
+});
+```
+
+CL Sync does not automatically roll back optimistic changes — you control the rollback in `onReject`. This keeps the library simple and predictable while giving you full flexibility over conflict resolution.
+
+## Persistence modes
+
+By default, CL Sync writes all persistent collections to IndexedDB. You can opt out at two levels:
+
+| Level | How |
+|---|---|
+| Per-collection | Set `persist: false` on the `CollectionDefinition` |
+| Whole store | Pass `persistence: "memory"` to `createSyncStore` |
+
+Memory mode is useful for server-side rendering environments (where IndexedDB isn't available) and for unit tests where you don't want filesystem side effects.
+
+```typescript
+const store = createSyncStore({
+  scope: { appId: "my-app" },
+  persistence: "memory", // no IndexedDB writes
+});
+```

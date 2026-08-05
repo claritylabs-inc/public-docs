@@ -1,0 +1,195 @@
+---
+title: "Building Insurance Agent System Prompts"
+sidebarTitle: "System Prompt"
+description: "Compose modular, platform-aware system prompts for insurance agents using buildAgentSystemPrompt and the individual prompt module functions."
+---
+
+CL SDK provides a modular prompt system purpose-built for insurance-aware conversational agents. Rather than maintaining a monolithic system prompt string, you compose it from independent modules — identity, intent, formatting, safety, coverage gaps, COI routing, and more. Each module is platform-aware and intent-aware, so the same `buildAgentSystemPrompt` call produces appropriately different behavior for an email agent, a Slack bot, and an SMS assistant.
+
+## Quick Start
+
+```typescript
+import { buildAgentSystemPrompt } from "@claritylabs/cl-sdk";
+import type { AgentContext } from "@claritylabs/cl-sdk";
+
+const ctx: AgentContext = {
+  platform: "email",
+  intent: "direct",
+  siteUrl: "https://app.example.com",
+  companyName: "Acme Insurance",
+  userName: "Jane Smith",
+};
+
+const systemPrompt = buildAgentSystemPrompt(ctx);
+```
+
+Pass `systemPrompt` as the `system` parameter to your LLM provider call. The output is a plain string — no special formatting required.
+
+## AgentContext Reference
+
+<ParamField body="platform" type="string" required>
+  The communication channel this agent operates on. Affects formatting rules and link guidance.
+  One of: `"email"` | `"chat"` | `"sms"` | `"slack"` | `"discord"`
+</ParamField>
+
+<ParamField body="intent" type="string" required>
+  Behavioral mode for the agent. Controls how the agent presents itself and what actions it takes autonomously.
+  One of: `"direct"` | `"mediated"` | `"observed"`
+</ParamField>
+
+<ParamField body="siteUrl" type="string" required>
+  Base URL of your application. Used in link guidance and COI routing instructions.
+</ParamField>
+
+<ParamField body="companyName" type="string">
+  Display name for your organization. Appears in the identity module.
+</ParamField>
+
+<ParamField body="companyContext" type="string">
+  Free-form organization-specific context injected into the identity module. Use this to describe your book of business, customer base, or specialized lines.
+</ParamField>
+
+<ParamField body="userName" type="string">
+  Name of the user the agent is speaking with. Used for personalization in the identity module.
+</ParamField>
+
+<ParamField body="agentName" type="string">
+  Display name for the agent. Defaults to `"CL-0 Agent"` if not provided.
+</ParamField>
+
+<ParamField body="coiHandling" type="string">
+  Controls COI routing instructions. One of: `"broker"` | `"user"` | `"member"` | `"ignore"`
+</ParamField>
+
+<ParamField body="brokerName" type="string">
+  Name of the broker organization, used in COI routing and mediated intent modules.
+</ParamField>
+
+<ParamField body="brokerContactName" type="string">
+  Broker contact's full name for escalation instructions.
+</ParamField>
+
+<ParamField body="brokerContactEmail" type="string">
+  Broker contact's email address for escalation routing.
+</ParamField>
+
+<ParamField body="platformConfig" type="PlatformConfig">
+  Advanced per-platform configuration for output formatting. See platform-specific options below.
+</ParamField>
+
+<ParamField body="linkGuidance" type="string">
+  Custom override for link formatting instructions. Replaces the default guidance derived from `platform` and `siteUrl`.
+</ParamField>
+
+## Prompt Modules
+
+`buildAgentSystemPrompt` composes the following modules in order. Each module is a function you can also call individually for custom compositions.
+
+<Steps>
+  <Step title="Identity">
+    Establishes who the agent is, the company it works for, and any organization-specific context. Sets the agent's name and scopes its expertise to insurance.
+  </Step>
+  <Step title="Intent">
+    Applies behavioral rules based on the `intent` value. `direct` — speaks and acts as the primary point of contact. `mediated` — acts on behalf of a broker, surfaces broker contact for escalations. `observed` — summarizes and routes, does not make commitments.
+  </Step>
+  <Step title="Formatting">
+    Platform-specific output rules. Email agents produce well-structured prose with salutations. Chat and Slack agents use markdown. SMS agents avoid markdown entirely and keep responses short.
+  </Step>
+  <Step title="Safety">
+    Scope guardrails that restrict the agent to insurance topics. Anti-hallucination rules that require citing evidence before stating coverage facts. Prompt injection defenses that prevent instruction override via user messages.
+  </Step>
+  <Step title="Coverage Gaps">
+    Guidance for proactively identifying and surfacing gaps in coverage when comparing quotes or reviewing policy documents.
+  </Step>
+  <Step title="COI Routing">
+    Instructions for handling certificate of insurance requests based on the `coiHandling` setting. Routes requests to the appropriate party or self-serves generation when permitted.
+  </Step>
+  <Step title="Quotes and Policies">
+    Guidance on correctly differentiating between quote documents and bound policy documents, and appropriate language for each.
+  </Step>
+  <Step title="Memory">
+    Instructions for using conversation history to provide continuity across sessions without re-asking for information the user has already provided.
+  </Step>
+</Steps>
+
+## Custom Module Composition
+
+Call individual module builders when you need to add, remove, or reorder modules for a specialized agent.
+
+```typescript
+import {
+  buildIdentityPrompt,
+  buildSafetyPrompt,
+  buildFormattingPrompt,
+  buildCoverageGapPrompt,
+  buildCoiRoutingPrompt,
+  buildQuotesPoliciesPrompt,
+  buildConversationMemoryGuidance,
+  buildIntentPrompt,
+} from "@claritylabs/cl-sdk";
+
+// Custom composition: skip COI routing, add a custom section
+const customPrompt = [
+  buildIdentityPrompt(ctx),
+  buildIntentPrompt(ctx),
+  buildFormattingPrompt(ctx),
+  buildSafetyPrompt(ctx),
+  buildCoverageGapPrompt(ctx),
+  buildQuotesPoliciesPrompt(ctx),
+  buildConversationMemoryGuidance(ctx),
+  "## Custom Instructions\nAlways recommend reviewing the declarations page first.",
+]
+  .filter(Boolean)
+  .join("\n\n");
+```
+
+<Note>
+  Each module function returns a string or `null`. Filtering out `null` values before joining ensures you don't get blank sections when a module has nothing to contribute for a given context.
+</Note>
+
+## Intent Classification
+
+When your pipeline receives inbound messages (emails, chat messages) and needs to route them before calling the agent, use `buildClassifyMessagePrompt` to generate a classification prompt.
+
+```typescript
+import { buildClassifyMessagePrompt } from "@claritylabs/cl-sdk";
+
+const classificationPrompt = buildClassifyMessagePrompt("email");
+
+const { object } = await generateObject({
+  model: yourModel,
+  system: classificationPrompt,
+  prompt: inboundEmailBody,
+  schema: MessageClassificationSchema,
+});
+// object.intent, object.documentIds, object.requestType
+```
+
+## Platform Behavior Reference
+
+<Tabs>
+  <Tab title="email">
+    - Produces full salutation and sign-off
+    - Uses structured sections with bold headers
+    - Includes policy numbers and document references inline
+    - Provides full links with descriptive anchor text
+  </Tab>
+  <Tab title="chat">
+    - Uses markdown headings and bullet lists
+    - Keeps responses conversational and concise
+    - Renders inline code for policy numbers
+    - Short links are acceptable
+  </Tab>
+  <Tab title="sms">
+    - No markdown whatsoever
+    - Responses under 320 characters when possible
+    - Spell out numbers and codes rather than formatting them
+    - Links only when essential
+  </Tab>
+  <Tab title="slack / discord">
+    - Uses Slack/Discord markdown flavors
+    - Emoji are acceptable for status indicators
+    - Uses `@mention` format for escalations when a broker contact is configured
+    - Thread replies for long responses
+  </Tab>
+</Tabs>

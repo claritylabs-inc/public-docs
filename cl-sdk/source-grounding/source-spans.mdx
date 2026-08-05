@@ -1,0 +1,190 @@
+---
+title: "Building and Using Source Spans for Evidence"
+sidebarTitle: "Source Spans"
+description: "Learn how to build SourceSpan objects from PDF pages, sections, tables, and free text to create a stable, verifiable evidence layer."
+---
+
+A `SourceSpan` is the atomic unit of evidence in CL SDK. Every extracted field, cited answer, and PCE change request traces back to one or more spans. Building spans correctly — stable IDs, accurate page ranges, meaningful section metadata — is the single most important step in producing trustworthy outputs from any CL SDK workflow.
+
+## SourceSpan Schema
+
+<CodeGroup>
+```typescript Full Interface
+interface SourceSpan {
+  id: string;
+  documentId: string;
+  sourceKind?: "policy_pdf" | "application_pdf" | "email" | "attachment" | "manual_note";
+  kind: "pdf_text" | "pdf_image" | "html" | "markdown" | "plain_text" | "structured_field";
+  text: string;
+  hash: string;
+  pageStart?: number;
+  pageEnd?: number;
+  sectionId?: string;
+  formNumber?: string;
+  sourceUnit?: "page" | "section" | "table" | "table_row" | "table_cell" | "key_value" | "text";
+  parentSpanId?: string;
+  table?: {
+    tableId?: string;
+    rowIndex?: number;
+    columnIndex?: number;
+    columnName?: string;
+    rowSpanId?: string;
+    isHeader?: boolean;
+  };
+  location?: SourceSpanLocation;
+  metadata?: Record<string, string>;
+}
+```
+</CodeGroup>
+
+<Note>
+  The `hash` field is computed automatically by CL SDK builders from the span's `text` content. You do not need to set it manually. Span IDs should be derived from `documentId + pageNumber + sectionId + hash` so that identical text on the same page always produces the same ID.
+</Note>
+
+## Builder Functions
+
+CL SDK provides four builder functions that handle ID generation, hashing, and metadata normalization for you.
+
+```typescript
+import {
+  buildPageSourceSpans,
+  buildSectionSourceSpans,
+  buildTextSourceSpans,
+  chunkSourceSpans,
+} from "@claritylabs/cl-sdk";
+```
+
+## Building Page Spans
+
+Page spans are the best default for PDF documents. Each span covers one full page of extracted text, giving the LLM a predictable context window and making page citations exact.
+
+```typescript
+const spans = buildPageSourceSpans([
+  {
+    documentId: "policy-123",
+    pageNumber: 12,
+    sourceKind: "policy_pdf",
+    text: pageText,
+    sectionId: "definitions",
+    formNumber: "CG 00 01",
+  },
+]);
+```
+
+<Tip>
+  Pass `sectionId` and `formNumber` whenever you can parse them from the PDF. These fields dramatically improve retrieval precision for coverage queries against multi-form commercial policies.
+</Tip>
+
+## Building Section Spans
+
+Section spans split page text at insurance heading boundaries. Use them when your PDF parser produces reliable headings and you want finer-grained retrieval without the overhead of chunking.
+
+```typescript
+const spans = buildSectionSourceSpans(pages, {
+  minSectionChars: 120,
+});
+```
+
+<ParamField body="pages" type="PageInput[]" required>
+  Array of page objects with `documentId`, `pageNumber`, `text`, and optional `sourceKind`.
+</ParamField>
+
+<ParamField body="options.minSectionChars" type="number" default="120">
+  Minimum character length for a section span. Sections shorter than this threshold are merged into the preceding span.
+</ParamField>
+
+## Building Text Spans
+
+Use `buildTextSourceSpans` for long free-text sources that don't have natural page breaks — emails, manual notes, attachments, and HTML extracts. The builder chunks the text into overlapping windows.
+
+```typescript
+const spans = buildTextSourceSpans(
+  {
+    documentId: "email-456",
+    sourceKind: "email",
+    text: emailBody,
+  },
+  {
+    maxChars: 4000,
+    overlapChars: 250,
+  },
+);
+```
+
+<ParamField body="input.documentId" type="string" required>
+  Stable identifier for the source document.
+</ParamField>
+
+<ParamField body="input.sourceKind" type="string">
+  One of `"email"`, `"attachment"`, `"manual_note"`, `"html"`, or `"plain_text"`.
+</ParamField>
+
+<ParamField body="options.maxChars" type="number" default="4000">
+  Maximum characters per span window.
+</ParamField>
+
+<ParamField body="options.overlapChars" type="number" default="250">
+  Character overlap between adjacent spans to avoid cutting evidence across boundaries.
+</ParamField>
+
+## Chunking for Retrieval
+
+After building spans, chunk them into retrieval windows for vector search. Chunks are larger than spans and respect span boundaries, so a single chunk never splits a table row or section heading mid-sentence.
+
+```typescript
+const chunks = chunkSourceSpans(spans, { maxChars: 6000 });
+```
+
+Store chunks alongside spans in your `SourceStore`. The query agent and PCE agent use both: chunks for initial retrieval, spans for final citation.
+
+## Table Span Hierarchy
+
+When you process documents with Docling, table content is represented as a three-level span hierarchy:
+
+<Steps>
+  <Step title="Table span (sourceUnit: 'table')">
+    Contains the full markdown rendering of the table. Used when the LLM needs the complete table structure for context.
+
+    ```
+    | Coverage | Limit | Retention |
+    |----------|-------|-----------|
+    | E&O      | $5,000,000 Each Claim | $25,000 |
+    ```
+  </Step>
+  <Step title="Row span (sourceUnit: 'table_row')">
+    One header-aware row rendered as a readable key-value string. This is the **canonical evidence span** for table-derived policy facts.
+
+    ```
+    Coverage: E&O | Limit: $5,000,000 Each Claim | Retention: $25,000
+    ```
+  </Step>
+  <Step title="Cell span (sourceUnit: 'table_cell')">
+    A single cell value with `columnName` and `rowIndex` metadata. Points back to its parent row span via `parentSpanId`. Available for UI highlighting and precise bounding-box rendering.
+  </Step>
+</Steps>
+
+<Warning>
+  Row spans are the canonical evidence for table-derived policy facts. When the extractor quotes a limit from a schedule, it should cite the row span — not the cell span or the full table span — so the quoted text is human-readable and verifiable.
+</Warning>
+
+## Span Metadata
+
+Use the `metadata` field to attach arbitrary key-value pairs without polluting the core schema. Common uses:
+
+```typescript
+const spans = buildPageSourceSpans([
+  {
+    documentId: "policy-123",
+    pageNumber: 5,
+    text: pageText,
+    metadata: {
+      carrierName: "Acme Casualty",
+      policyNumber: "GL-2024-001",
+      endorsementEffectiveDate: "2024-01-01",
+      ocr_confidence: "0.97",
+    },
+  },
+]);
+```
+
+Metadata values are indexed by `SourceStore` implementations and available as filters in `SourceRetrievalQuery`.

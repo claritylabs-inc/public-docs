@@ -1,0 +1,115 @@
+---
+title: "SyncProvider: React Context for CL Sync"
+sidebarTitle: "Provider"
+description: "Wrap your app with SyncProvider to hydrate the store on mount, register mutations for outbox replay, and expose sync state to all hooks."
+---
+
+`SyncProvider` is the bridge between your `SyncStore` instance and the React component tree. It calls `store.hydrate()` on mount, optionally flushes pending mutations after hydration, and makes the store available to all CL Sync hooks via React context.
+
+## Basic setup
+
+```tsx
+import { SyncProvider } from "@claritylabs/cl-sync/react";
+import { store } from "./store";
+import { createTodo, updateTodo, deleteTodo } from "./mutations";
+
+export function App() {
+  return (
+    <SyncProvider
+      store={store}
+      mutations={[createTodo, updateTodo, deleteTodo]}
+      flushOnHydrate
+    >
+      <YourApp />
+    </SyncProvider>
+  );
+}
+```
+
+## Props
+
+<ParamField path="store" type="SyncStore" required>
+  The `SyncStore` instance created by `createSyncStore`. Provide the same instance on every render — changing this prop tears down and re-initializes the entire sync context.
+</ParamField>
+
+<ParamField path="mutations" type="MutationDefinition[]">
+  An optional array of mutation definitions to register before hydration. Registering mutations here ensures that outbox items from a previous session are matched to their definitions and can be replayed when `flushOnHydrate` is `true`.
+</ParamField>
+
+<ParamField path="flushOnHydrate" type="boolean">
+  When `true`, `SyncProvider` calls `store.flushPendingMutations()` immediately after `store.hydrate()` resolves. Defaults to `false`. Use this when you want the simplest possible setup and your auth token is already available at mount time.
+</ParamField>
+
+<ParamField path="children" type="ReactNode" required>
+  The component subtree that will have access to sync context.
+</ParamField>
+
+## Mounting behavior
+
+On mount, `SyncProvider` runs the following sequence:
+
+1. Calls `store.registerMutations(mutations)` if `mutations` was provided.
+2. Calls `await store.hydrate()` to load IndexedDB and run any pending migrations.
+3. If `flushOnHydrate` is `true`, calls `await store.flushPendingMutations()`.
+4. Notifies all subscribers, causing `useSyncStatus().hydrated` to become `true`.
+
+All children render immediately — they see `status.hydrated === false` on the first render, then re-render once hydration completes. Use `useSyncStatus()` to gate content on hydration:
+
+```tsx
+function TodoList() {
+  const { hydrated } = useSyncStatus();
+  if (!hydrated) return <LoadingSpinner />;
+  // ... render todos
+}
+```
+
+## Manual flush control
+
+If you need to refresh an auth token or perform async work before replaying mutations, skip `flushOnHydrate` and handle the sequence yourself:
+
+```typescript
+// In an effect or event handler after auth is confirmed:
+await store.hydrate();
+const freshToken = await refreshAuthToken();
+store.registerMutations([createTodo, updateTodo, deleteTodo]);
+await store.flushPendingMutations();
+```
+
+<Note>
+  Calling `store.hydrate()` more than once is safe — subsequent calls are no-ops if the store is already hydrated.
+</Note>
+
+## Scoping the provider to a user
+
+Create the store inside a component (or with `useMemo`) that re-creates it when the authenticated user changes. This ensures each user gets a fresh scope:
+
+```tsx
+import { useMemo } from "react";
+import { createSyncStore } from "@claritylabs/cl-sync";
+import { SyncProvider } from "@claritylabs/cl-sync/react";
+
+function AuthenticatedShell({ userId }: { userId: string }) {
+  const store = useMemo(
+    () =>
+      createSyncStore({
+        scope: {
+          appId: "my-app",
+          environment: import.meta.env.MODE,
+          userId,
+        },
+        schema: { version: 1 },
+      }),
+    [userId]
+  );
+
+  return (
+    <SyncProvider store={store} mutations={[createTodo]} flushOnHydrate>
+      <App />
+    </SyncProvider>
+  );
+}
+```
+
+<Warning>
+  Do not create the store inside a component without `useMemo`. A new store on every render loses all cached state and re-hydrates from scratch.
+</Warning>

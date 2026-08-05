@@ -1,0 +1,146 @@
+---
+title: "Form Structure and Source Tree Organization"
+sidebarTitle: "Form Structure"
+description: "Learn how the CL SDK source tree represents policy form structure and how to work with form inventory projections and coverage lines."
+---
+
+The CL SDK extraction pipeline does not run a separate form-inventory model pass. Instead, form structure emerges naturally from the source tree that phase 3 of the pipeline constructs. Each node in the tree carries a `kind` that describes what structural role it plays in the document — a `form`, an `endorsement`, a `section`, a `schedule`, and so on. This design keeps form identification grounded in the actual document layout rather than a secondary classification step.
+
+## DocumentSourceNodeKind
+
+Every node in the source tree is typed by its `DocumentSourceNodeKind`:
+
+```typescript
+type DocumentSourceNodeKind =
+  | "document"    // Root of the tree
+  | "page_group"  // Logical grouping of pages
+  | "page"        // Individual PDF page
+  | "form"        // Named policy form
+  | "endorsement" // Endorsement form
+  | "section"     // Labeled section within a form
+  | "schedule"    // Schedule table or list
+  | "clause"      // Individual clause or condition
+  | "table"       // Tabular structure
+  | "table_row"   // Row within a table
+  | "table_cell"  // Cell within a table row
+  | "text";       // Freeform text block
+```
+
+Nodes of kind `form` and `endorsement` are the primary anchor points for form inventory. Their `id`, `title`, and child nodes are derived directly from headings and form numbers found in the source text.
+
+## Form Inventory as a Compatibility Projection
+
+Three surfaces in the extraction result expose a `formInventory` field:
+
+- `document.formInventory`
+- `documentMetadata.formInventory`
+- `reviewReport.formInventory`
+
+All three are **compatibility projections** computed from the `form` and `endorsement` nodes in the source tree. You do not need to populate them manually — they are materialized automatically during phase 7 of the pipeline.
+
+Each entry in the inventory conforms to the `FormReference` schema:
+
+```typescript
+interface FormReference {
+  formNumber: string;
+  editionDate?: string;
+  title?: string;
+  formType: "coverage" | "endorsement" | "declarations" | "application" | "notice" | "other";
+}
+```
+
+<ResponseField name="formNumber" type="string" required>
+  The form number as it appears in the source document (e.g. `"CG 00 01"`, `"ISO-GL-2019"`).
+</ResponseField>
+
+<ResponseField name="editionDate" type="string">
+  The edition date printed on the form, if present.
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  The form's title derived from source headings. Titles are kept terse — they reflect the source text and are not rephrased.
+</ResponseField>
+
+<ResponseField name="formType" type='"coverage" | "endorsement" | "declarations" | "application" | "notice" | "other"'>
+  The structural role of the form within the policy package.
+</ResponseField>
+
+## Coverage Lines vs. Legacy Flat Rows
+
+For v3 source-backed extraction, prefer reading coverage data from `operationalProfile.coverages` rather than from the legacy flat compatibility rows in `document.coverages`. The operational coverage lines carry structured limits and direct source references:
+
+```typescript
+interface OperationalCoverageLine {
+  name: string;
+  coverageCode?: string;
+  limit?: string;
+  deductible?: string;
+  premium?: string;
+  retroactiveDate?: string;
+  formNumber?: string;
+  sectionRef?: string;
+  endorsementNumber?: string;
+  limits: OperationalCoverageTerm[];  // each-claim, aggregate, retention, etc.
+  sourceNodeIds: string[];            // IDs of source tree nodes that support this line
+  sourceSpanIds: string[];            // IDs of raw source spans for PDF highlights
+}
+```
+
+<ResponseField name="limits" type="OperationalCoverageTerm[]">
+  Structured limit terms for this coverage line. Each term carries a `termKind` (e.g. `"each_claim"`, `"aggregate"`, `"retention"`) and a `value` string.
+</ResponseField>
+
+<ResponseField name="sourceNodeIds" type="string[]">
+  References to `DocumentSourceNode.id` values in the source tree. Use these to navigate to the relevant form or section node.
+</ResponseField>
+
+<ResponseField name="sourceSpanIds" type="string[]">
+  References to `SourceSpan.id` values. Combine these with your parser's bounding boxes to render PDF highlights in your UI.
+</ResponseField>
+
+## Practical Guidance
+
+<CardGroup cols={2}>
+  <Card title="Index the Source Tree" icon="sitemap">
+    Build an ID-keyed index of `result.sourceTree` to support fast document navigation and targeted retrieval without re-traversing the full tree.
+  </Card>
+  <Card title="Use Span IDs for Highlights" icon="highlighter">
+    Pair `sourceSpanIds` with the bounding boxes your parser (Docling, PDF.js, etc.) recorded to render precise PDF highlights in a review UI.
+  </Card>
+  <Card title="Trust Source Heading Titles" icon="heading">
+    Let the pipeline derive titles from source headings. Don't override or rephrase them — terse, verbatim titles keep the source tree predictable across documents.
+  </Card>
+  <Card title="Avoid Duplicate Grouping" icon="layer-group">
+    Don't maintain a second form-grouping system in your application. The source tree is already the canonical structure — additional grouping logic diverges from it and creates maintenance burden.
+  </Card>
+</CardGroup>
+
+<Warning>
+  Don't use old page-map extractor assignments to decide whether a section is a coverage, endorsement, condition, or exclusion. Those assignments were heuristic and are no longer produced on v3 source-tree paths. Read `DocumentSourceNodeKind` from the tree instead.
+</Warning>
+
+## Querying the Source Tree
+
+The following example collects all `endorsement` nodes from the source tree and logs their form numbers:
+
+```typescript
+import type { DocumentSourceNode } from "@claritylabs/cl-sdk";
+
+function collectEndorsements(nodes: DocumentSourceNode[]): DocumentSourceNode[] {
+  return nodes.flatMap((node) => {
+    const children = node.children ? collectEndorsements(node.children) : [];
+    return node.kind === "endorsement" ? [node, ...children] : children;
+  });
+}
+
+const result = await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
+const endorsements = collectEndorsements(result.sourceTree ?? []);
+
+for (const node of endorsements) {
+  console.log(node.id, node.title);
+}
+```
+
+<Tip>
+  Store the source tree in a vector or document index alongside your embeddings so that retrieval-augmented workflows can cite specific nodes by ID rather than reconstructing document structure at query time.
+</Tip>

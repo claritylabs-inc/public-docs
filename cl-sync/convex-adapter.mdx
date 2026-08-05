@@ -1,0 +1,166 @@
+---
+title: "Using CL Sync with Convex"
+sidebarTitle: "Convex Adapter"
+description: "Connect CL Sync to Convex real-time queries and mutations using defineConvexCollection, defineConvexMutation, and subscribeConvexCollection."
+---
+
+The Convex adapter (`@claritylabs/cl-sync/convex`) wires CL Sync's local-first store directly to Convex's real-time query subscriptions and mutations. You get instant IndexedDB hydration on load, live updates as Convex pushes changes, and durable optimistic mutations through the outbox — all with Convex function references typed end-to-end.
+
+<Note>
+  Requires `convex >=1.30.0` as a peer dependency. Install it alongside `@claritylabs/cl-sync`: `npm install @claritylabs/cl-sync convex`
+</Note>
+
+## Define a Convex collection
+
+`defineConvexCollection` extends `defineCollection` with a `query` field (a Convex query function reference) and an optional `mapSnapshot` transform.
+
+```typescript
+import { api } from "./convex/_generated/api";
+import { defineConvexCollection } from "@claritylabs/cl-sync/convex";
+
+const todosCollection = defineConvexCollection({
+  name: "todos",
+  query: api.todos.list,           // Convex query function reference
+  getId: (todo) => todo._id,
+  mapSnapshot: (result) => result, // optional: transform query result to records
+});
+```
+
+<ParamField path="query" type="FunctionReference" required>
+  A Convex query function reference (e.g., `api.todos.list`). Passed directly to `convex.onUpdate` for real-time subscription.
+</ParamField>
+
+<ParamField path="mapSnapshot" type="(result: TQuery) => TRecord[]">
+  Optional transform applied to the Convex query result before writing records to the store. Use this when the query returns a shape that doesn't match your `TRecord` type directly.
+</ParamField>
+
+All other fields — `name`, `getId`, `deriveKey`, `sort`, `persist`, `redactBeforePersist`, `staleMs` — behave identically to `defineCollection`.
+
+## Define a Convex mutation
+
+`defineConvexMutation` takes a `ConvexReactClient` and a definition object, and returns a `MutationDefinition` whose `flush` function calls `convex.mutation(...)` under the hood.
+
+```typescript
+import { ConvexReactClient } from "convex/react";
+import { defineConvexMutation } from "@claritylabs/cl-sync/convex";
+
+const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL);
+
+const createTodo = defineConvexMutation(convex, {
+  name: "todos.create",
+  mutation: api.todos.create,                         // Convex mutation function reference
+  mapArgs: (args, clientMutationId) => ({             // optional: transform args before calling Convex
+    ...args,
+    clientMutationId,
+  }),
+});
+```
+
+<ParamField path="mutation" type="FunctionReference" required>
+  A Convex mutation function reference (e.g., `api.todos.create`).
+</ParamField>
+
+<ParamField path="mapArgs" type="(args: TArgs, clientMutationId: string) => ConvexArgs">
+  Optional transform applied to your mutation args before they're passed to `convex.mutation`. Use it to inject `clientMutationId` for server-side deduplication, rename fields, or strip client-only data.
+</ParamField>
+
+You can still define `reducer`, `onAck`, and `onReject` alongside `mutation` — the adapter only provides the `flush` implementation.
+
+## Subscribe to a Convex query
+
+`subscribeConvexCollection` wires a Convex query subscription to your store. It fires immediately with the current snapshot and streams all subsequent updates via `onUpdate`.
+
+```typescript
+import { subscribeConvexCollection } from "@claritylabs/cl-sync/convex";
+import { createSyncStore } from "@claritylabs/cl-sync";
+
+const store = createSyncStore({
+  scope: { appId: "todo-app", userId: currentUser.id },
+  schema: { version: 1 },
+  mutations: [createTodo],
+});
+
+await store.hydrate();
+
+// Subscribe: syncs initial snapshot + streams real-time updates
+const unsubscribe = subscribeConvexCollection(
+  store,
+  convex,
+  todosCollection,
+  {}  // query args (passed to api.todos.list)
+);
+
+await store.flushPendingMutations();
+
+// Later, when unmounting or switching users:
+unsubscribe();
+```
+
+An optional fifth argument accepts an `onError` callback:
+
+```typescript
+const unsubscribe = subscribeConvexCollection(
+  store,
+  convex,
+  todosCollection,
+  {},
+  (error) => console.error("Convex subscription error:", error)
+);
+```
+
+## Full React setup
+
+Here's a complete example combining the Convex adapter with `SyncProvider` and hooks:
+
+```tsx
+import { createSyncStore } from "@claritylabs/cl-sync";
+import { SyncProvider, useSyncCollection, useSyncMutation } from "@claritylabs/cl-sync/react";
+import { subscribeConvexCollection } from "@claritylabs/cl-sync/convex";
+import { ConvexReactClient } from "convex/react";
+import { api } from "./convex/_generated/api";
+
+const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL);
+
+const store = createSyncStore({
+  scope: { appId: "todo-app", userId: currentUser.id },
+  schema: { version: 1 },
+  mutations: [createTodo],
+});
+
+// Subscribe outside React so the subscription is stable
+const unsubscribe = subscribeConvexCollection(store, convex, todosCollection, {});
+
+function App() {
+  return (
+    <SyncProvider store={store} mutations={[createTodo]} flushOnHydrate>
+      <TodoList />
+    </SyncProvider>
+  );
+}
+
+function TodoList() {
+  const todos = useSyncCollection(todosCollection, {}) ?? [];
+  const create = useSyncMutation(createTodo);
+
+  return (
+    <div>
+      <ul>
+        {todos.map((t) => (
+          <li key={t._id}>{t.title}</li>
+        ))}
+      </ul>
+      <button onClick={() => create({ title: "New todo" })}>Add todo</button>
+    </div>
+  );
+}
+```
+
+## Adapter types
+
+<ResponseField name="ConvexCollectionDefinition<TQuery, TRecord>" type="type">
+  Extends `CollectionDefinition<TRecord>` with `query: FunctionReference<"query", TQuery>` and optional `mapSnapshot: (result: TQuery) => TRecord[]`.
+</ResponseField>
+
+<ResponseField name="ConvexMutationDefinition<TMutation, TArgs, TResult>" type="type">
+  Extends `MutationDefinition<TArgs, TResult>` with `mutation: FunctionReference<"mutation", TMutation>` and optional `mapArgs: (args: TArgs, clientMutationId: string) => TMutation`.
+</ResponseField>

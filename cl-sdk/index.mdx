@@ -1,0 +1,87 @@
+---
+title: "Clarity Labs SDK: Provider-Agnostic LLM Insurance Toolkit"
+sidebarTitle: "Overview"
+description: "Build LLM-powered insurance workflows with source-grounded extraction, citation-backed queries, application pipelines, and PCE processing—no framework lock-in."
+---
+
+The Clarity Labs SDK (`@claritylabs/cl-sdk`) v4.5.0 gives you a complete toolkit for building LLM-powered insurance workflows entirely in TypeScript. Because it communicates with language models through plain callback functions—`GenerateText` and `GenerateObject`—you choose your own AI provider and model without any framework lock-in.
+
+## Install
+
+Install the SDK along with its peer dependencies:
+
+```bash
+npm install @claritylabs/cl-sdk pdf-lib zod
+```
+
+## Quick example
+
+The snippet below shows the core pattern: build source spans from your parsed PDF pages, create an extractor with your provider callback, and get a fully structured insurance document back in one call.
+
+```typescript
+import { buildPageSourceSpans, createExtractor } from "@claritylabs/cl-sdk";
+
+const extractor = createExtractor({ generateObject });
+const sourceSpans = buildPageSourceSpans([
+  { documentId: "policy-123", sourceKind: "policy_pdf", pageNumber: 1, text: pageOneText },
+]);
+
+const result = await extractor.extract(pdfBase64, "policy-123", { sourceSpans });
+console.log(result.document.carrier);      // "Hartford"
+console.log(result.operationalProfile);    // source-backed policy facts
+```
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Provider-agnostic LLM" icon="plug">
+    Pass any `generateText` or `generateObject` callback—Anthropic, OpenAI, Vercel AI SDK, or your own—without changing SDK code.
+  </Card>
+  <Card title="Source-tree extraction" icon="file-magnifying-glass">
+    Parser-provided PDF spans become a canonical source hierarchy, grounding every extracted fact in traceable evidence.
+  </Card>
+  <Card title="Citation-backed query agent" icon="message-question">
+    A five-phase query pipeline (classify → plan → retrieve → reason → respond) returns answers with source citations.
+  </Card>
+  <Card title="Application processing" icon="file-pen">
+    A full pipeline classifies, extracts, auto-fills, and batches questions from ACORD applications using a question graph.
+  </Card>
+  <Card title="PCE workflows" icon="file-contract">
+    Policy Change Endorsement processing handles intake, evidence collection, validation, and submission packet generation.
+  </Card>
+  <Card title="Case workflow primitives" icon="briefcase">
+    Shared building blocks for proposals, evidence tracking, validation, and stable IDs across case-based workflows.
+  </Card>
+  <Card title="Agent system prompts" icon="robot">
+    `buildAgentSystemPrompt` composes channel-aware prompts for email, chat, SMS, Slack, and Discord agents.
+  </Card>
+  <Card title="Storage interfaces" icon="database">
+    `DocumentStore`, `MemoryStore`, and `SourceStore` abstractions ship with a SQLite reference implementation.
+  </Card>
+</CardGroup>
+
+## Design principles
+
+CL SDK is built around four principles that keep your codebase clean and your workflows auditable:
+
+- **Provider-agnostic** — plain `GenerateText` and `GenerateObject` callbacks mean zero vendor coupling.
+- **Pure TypeScript** — no framework dependencies; works in Node.js, Bun, Deno, and edge runtimes.
+- **Deterministic scaffold with bounded agentic steps** — pipelines follow predictable phases; LLM decisions are confined to clearly marked decision points.
+- **Source-grounded** — every extracted fact, query answer, and workflow output cites `sourceNodeIds` or `sourceSpanIds`, giving you a full evidence trail.
+
+## What's included
+
+| Module | What it does |
+|--------|-------------|
+| `createExtractor` | Source-tree extraction from PDF or Docling input |
+| `createQueryAgent` | Citation-backed question answering over stored documents |
+| `createApplicationPipeline` | ACORD application processing with question batching |
+| `createPceAgent` | Policy Change Endorsement intake through submission packet |
+| `buildAgentSystemPrompt` | Channel-aware agent prompt composition |
+| Storage interfaces | `DocumentStore`, `MemoryStore`, `SourceStore`, `ApplicationStore` + SQLite impl |
+| ACORD LOB taxonomy | 107 line-of-business codes |
+| MCP server | Companion package for Model Context Protocol integration |
+
+<Tip>
+  If you're new to the SDK, head to the [Quickstart](/cl-sdk/quickstart) to have your first extraction running in minutes. For a deeper understanding of how the eight systems interact, see the [Architecture](/cl-sdk/architecture) page.
+</Tip>

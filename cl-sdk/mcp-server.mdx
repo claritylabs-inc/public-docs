@@ -1,0 +1,141 @@
+---
+title: "CL SDK MCP Server for AI Coding Assistants"
+sidebarTitle: "MCP Server"
+description: "Install the @claritylabs/cl-sdk-mcp companion package to give Claude, Cursor, and Windsurf live access to CL SDK documentation while you code."
+---
+
+The `@claritylabs/cl-sdk-mcp` companion package is a Model Context Protocol server that exposes CL SDK documentation to AI coding assistants. When you connect it to Claude Code, Cursor, or Windsurf, your assistant can search and read CL SDK docs directly — no copy-pasting, no stale context. You run it with `npx`, so there's nothing to install globally and no API keys to configure.
+
+## Tools Provided
+
+The MCP server exposes three tools to connected AI assistants:
+
+| Tool | Description |
+|------|-------------|
+| `search_docs` | Full-text search across all CL SDK doc pages. Returns the top 5 matches with surrounding context. |
+| `read_doc_page` | Read a specific doc page by slug (e.g. `getting-started/quickstart`, `source-grounding/overview`). |
+| `list_doc_sections` | List all sections and pages in the CL SDK documentation tree. |
+
+## Setup for Claude Code
+
+Add the MCP server to your project's Claude configuration. Claude Code reads from `.claude/mcp.json` in your project root.
+
+```json
+// .claude/mcp.json
+{
+  "mcpServers": {
+    "cl-sdk": {
+      "command": "npx",
+      "args": ["@claritylabs/cl-sdk-mcp"]
+    }
+  }
+}
+```
+
+After saving the file, restart Claude Code. The `cl-sdk` server will appear in your connected tools list, and Claude will automatically use it when answering questions about CL SDK.
+
+## Setup for Cursor / Windsurf
+
+Cursor and Windsurf read MCP configuration from a file in your home directory.
+
+<Tabs>
+  <Tab title="Cursor">
+    ```json
+    // ~/.cursor/mcp.json
+    {
+      "mcpServers": {
+        "cl-sdk": {
+          "command": "npx",
+          "args": ["@claritylabs/cl-sdk-mcp"]
+        }
+      }
+    }
+    ```
+
+    After saving, open Cursor Settings → MCP and click **Refresh**. The `cl-sdk` server will appear with a green status indicator when active.
+  </Tab>
+  <Tab title="Windsurf">
+    ```json
+    // ~/.codeium/windsurf/mcp_config.json
+    {
+      "mcpServers": {
+        "cl-sdk": {
+          "command": "npx",
+          "args": ["@claritylabs/cl-sdk-mcp"]
+        }
+      }
+    }
+    ```
+
+    Restart Windsurf after saving. The MCP server starts on-demand when Cascade first calls a CL SDK documentation tool.
+  </Tab>
+</Tabs>
+
+<Note>
+  The first `npx` invocation downloads the package. Subsequent invocations use the cached version. To force a refresh to the latest documentation, run `npx --yes @claritylabs/cl-sdk-mcp` once to update the cache.
+</Note>
+
+## HTTP Mode for Remote Connectors
+
+If you're connecting from Claude.ai's remote MCP connector, or building a server-side integration, start the MCP server in HTTP mode:
+
+```bash
+npx @claritylabs/cl-sdk-mcp --http
+# Listening on http://0.0.0.0:8787
+# MCP endpoint: POST /mcp
+```
+
+The server accepts standard MCP JSON-RPC requests at `POST /mcp`.
+
+### Environment Variables
+
+<ParamField body="PORT" type="number" default="8787">
+  TCP port for the HTTP server to listen on.
+</ParamField>
+
+<ParamField body="HOST" type="string" default="0.0.0.0">
+  Network interface to bind to. Set to `127.0.0.1` to restrict to localhost.
+</ParamField>
+
+Example with custom port:
+
+```bash
+PORT=9000 HOST=127.0.0.1 npx @claritylabs/cl-sdk-mcp --http
+# Listening on http://127.0.0.1:9000
+```
+
+### Connecting from Claude.ai
+
+<Steps>
+  <Step title="Start the HTTP server">
+    Run the server on a publicly accessible host or tunnel your local port:
+
+    ```bash
+    npx @claritylabs/cl-sdk-mcp --http
+    ```
+  </Step>
+  <Step title="Add the remote connector in Claude.ai">
+    Go to **Settings → Integrations → Add Integration**. Enter your MCP endpoint URL:
+
+    ```
+    https://your-host:8787/mcp
+    ```
+  </Step>
+  <Step title="Authorize and verify">
+    Claude.ai will send a capabilities request to confirm the server is reachable. Once connected, you'll see `search_docs`, `read_doc_page`, and `list_doc_sections` in the available tools list.
+  </Step>
+</Steps>
+
+## What the Assistant Sees
+
+When you ask your AI assistant a question about CL SDK, it uses `search_docs` to find relevant pages and `read_doc_page` to read the full content. For example:
+
+- *"How do I build page source spans?"* → searches and reads `source-grounding/source-spans`
+- *"What storage interfaces does CL SDK define?"* → reads `storage/overview`
+- *"Show me the PCE agent config options"* → reads `reference/api`
+
+The assistant reads live documentation rather than relying on its training data cutoff, so you always get accurate, up-to-date answers as the SDK evolves.
+
+<Tip>
+  Use `list_doc_sections` to orient your assistant at the start of a session. Ask it to list all available CL SDK documentation sections before diving into a specific topic — this helps it navigate the doc tree more accurately for follow-up questions.
+</Tip>

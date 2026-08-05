@@ -1,0 +1,133 @@
+---
+title: "CL Pipelines Core Concepts Explained"
+sidebarTitle: "Concepts"
+description: "Understand Jobs, Phases, Checkpoints, PipelineStatus, StorageAdapter, SchedulerAdapter, RetryMode, and PhaseResult before writing your first pipeline."
+---
+
+Before you wire up adapters or write phases, it helps to have a mental model of how the pieces fit together. This page defines each concept precisely so you can reason about what the library stores, when it stores it, and what happens when something goes wrong.
+
+## Job
+
+A **job** is a single pipeline run identified by a `jobId` string you provide. Every piece of state — status, checkpoint, and log entries — is scoped to that ID. Two pipelines with different `jobId` values are completely independent, even if they share the same phase definitions and adapters.
+
+```typescript
+await runPipeline({
+  jobId: "invoice-7829",  // your ID — use a database row ID, UUID, etc.
+  phases: [...],
+  storage,
+  scheduler,
+  initialState: { ...},
+});
+```
+
+## Phase
+
+A **phase** is the smallest unit of work. It is a plain TypeScript object with two fields:
+
+- `name: string` — unique within the phases array; used to look up the phase by name from the checkpoint
+- `run: (ctx: PhaseContext<TState>) => Promise<PhaseResult<TState>>` — your business logic
+
+Phases are stateless objects — all mutable state flows through the `Checkpoint<TState>`. This makes them easy to test in isolation: construct a fake `PhaseContext` and call `run` directly.
+
+## Checkpoint
+
+A **checkpoint** is a serialized snapshot of in-progress state. The storage layer persists it after every successful phase transition and whenever your phase calls `ctx.saveState()`.
+
+```typescript
+type Checkpoint<TState = unknown> = {
+  nextPhase: string;  // name of the next phase to execute
+  state: TState;      // arbitrary state passed between phases
+  createdAt: number;  // Unix timestamp in milliseconds
+};
+```
+
+The checkpoint is what makes crash recovery possible. If your process dies mid-job, the next `runPipeline` call reads the existing checkpoint and resumes from exactly that point — no work is duplicated up to the last save.
+
+## PipelineStatus
+
+Every job has one of five statuses:
+
+| Status | Meaning |
+|---|---|
+| `"idle"` | Job record exists but has not started yet |
+| `"running"` | A phase is scheduled or currently executing |
+| `"paused"` | Execution intentionally halted (e.g. awaiting human approval) |
+| `"complete"` | Final phase returned `{ kind: "done" }` |
+| `"error"` | A phase threw or returned `{ kind: "error" }` |
+
+## StorageAdapter
+
+The **StorageAdapter** is the interface between `cl-pipelines` and your database or key-value store. You implement five methods:
+
+```typescript
+type StorageAdapter<TState> = {
+  getJob(jobId: string): Promise<{
+    status: PipelineStatus;
+    checkpoint: Checkpoint<TState> | null;
+    error?: string;
+  } | null>;
+  setStatus(jobId: string, status: PipelineStatus, error?: string): Promise<void>;
+  setCheckpoint(jobId: string, checkpoint: Checkpoint<TState> | null): Promise<void>;
+  appendLog(jobId: string, entry: LogEntry): Promise<void>;
+  clearLog(jobId: string): Promise<void>;
+};
+```
+
+The library never accesses your database directly — it only calls these methods. This means you can back it with Convex, PostgreSQL, Redis, or the built-in in-memory adapter without changing any pipeline logic.
+
+## SchedulerAdapter
+
+The **SchedulerAdapter** is the interface between `cl-pipelines` and your job queue or task scheduler. It has a single method:
+
+```typescript
+type SchedulerAdapter = {
+  scheduleAdvance(jobId: string, delayMs: number): Promise<void>;
+};
+```
+
+After each successful phase, the library calls `scheduleAdvance(jobId, 0)` to trigger the next advance. You implement this by enqueuing a call to `advancePhase` in your scheduler (e.g. Convex's `ctx.scheduler.runAfter`).
+
+## RetryMode
+
+**RetryMode** controls what happens when you call `runPipeline` on a job that already has a checkpoint:
+
+| Mode | Behavior |
+|---|---|
+| `"resume"` | Starts from the last saved checkpoint — only failed work re-runs |
+| `"full"` | Discards the checkpoint and restarts from `initialPhase` with `initialState` |
+
+When no `retryMode` is specified and a checkpoint exists, the library behaves as `"resume"`. See the [Retry Modes](/cl-pipelines/phase-runner/retry-modes) page for guidance on when to choose each.
+
+## PhaseResult
+
+Every `run` function must return one of three result shapes:
+
+```typescript
+type PhaseResult<TState> =
+  | { kind: "next"; nextPhase: string; state: TState }  // advance to named phase
+  | { kind: "done" }                                    // pipeline complete
+  | { kind: "error"; error: string };                   // set status: "error"
+```
+
+<Note>
+  Both `{ kind: "error" }` returns **and** thrown exceptions preserve the checkpoint. This means `retryMode: "resume"` works correctly for all error scenarios — the job can always resume from the last safe state.
+</Note>
+
+## How the pieces connect
+
+```
+runPipeline()
+  └─ writes initial Checkpoint<TState> to StorageAdapter
+  └─ calls SchedulerAdapter.scheduleAdvance(jobId, 0)
+
+SchedulerAdapter fires
+  └─ calls advancePhase()
+       └─ reads Checkpoint via StorageAdapter.getJob()
+       └─ finds Phase by checkpoint.nextPhase
+       └─ calls phase.run(ctx)
+            └─ ctx.log()       → StorageAdapter.appendLog()
+            └─ ctx.saveState() → StorageAdapter.setCheckpoint()
+       └─ on "next"  → setCheckpoint() + scheduleAdvance()
+       └─ on "done"  → setCheckpoint(null) + setStatus("complete")
+       └─ on "error" → setStatus("error") [checkpoint unchanged]
+```

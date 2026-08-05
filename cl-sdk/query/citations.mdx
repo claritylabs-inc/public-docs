@@ -1,0 +1,176 @@
+---
+title: "How Query Citations and Provenance Work"
+sidebarTitle: "Citations"
+description: "Learn how the query agent builds, verifies, and surfaces inline citations so every factual claim in an answer traces back to a specific source chunk."
+---
+
+Every answer produced by the query agent carries a list of citations — structured references that map each factual claim back to the exact chunk and quoted text that supports it. Citations are created by the reasoner, verified for accuracy before the answer is assembled, and then deduplicated and numbered sequentially so you can display them inline or surface them in a review UI.
+
+## Citation Structure
+
+```typescript
+interface Citation {
+  index: number;        // Display number: [1], [2], etc.
+  chunkId: string;      // Source chunk ID, e.g. "doc-123:coverage:2"
+  documentId: string;   // Parent document ID
+  documentType?: "policy" | "quote";
+  field?: string;       // Specific field path within the document
+  quote: string;        // Exact text from the source that supports the claim
+  relevance: number;    // 0–1 similarity score from retrieval
+}
+```
+
+<ResponseField name="index" type="number">
+  The sequential display number assigned during the Respond phase. Corresponds directly to the `[n]` marker embedded in `result.answer`.
+</ResponseField>
+
+<ResponseField name="chunkId" type="string">
+  The unique identifier for the retrieved chunk, formatted as `documentId:section:chunkIndex`. Use this to look up the full chunk in your document store.
+</ResponseField>
+
+<ResponseField name="documentId" type="string">
+  The parent document's ID. Matches records in your `documentStore`.
+</ResponseField>
+
+<ResponseField name="documentType" type='"policy" | "quote"'>
+  Optional document type tag populated when the document store provides it.
+</ResponseField>
+
+<ResponseField name="field" type="string">
+  Optional field path (e.g. `coverage.generalLiability.perOccurrenceLimit`) when the citation points to a structured field rather than a free-text chunk.
+</ResponseField>
+
+<ResponseField name="quote" type="string">
+  The exact text extracted from the source chunk that directly supports the claim. The verifier phase checks that this quote is genuinely present in the referenced chunk.
+</ResponseField>
+
+<ResponseField name="relevance" type="number">
+  Similarity score from `0` to `1` assigned during the retrieval phase. Higher values indicate a closer semantic match to the sub-question.
+</ResponseField>
+
+---
+
+## How Citations Flow Through the Pipeline
+
+Citations are produced and refined across four pipeline phases. Understanding the flow helps you debug low-confidence answers or missing citations in your UI.
+
+<Steps>
+  <Step title="Retrieval produces evidence items">
+    Each retrieval strategy (chunk search, document lookup, source retrieval, conversation history) returns evidence items that carry source references — the chunk ID, document ID, and the raw text of the chunk. These references become the raw material for citations.
+  </Step>
+
+  <Step title="Reasoners create citations from evidence">
+    Each reasoner is given only its assigned evidence items. For every factual claim it makes, it must produce a citation pointing to a specific evidence item and include an exact quote from that item. Claims without a supporting evidence item are either omitted or flagged as low-confidence.
+  </Step>
+
+  <Step title="Verifier checks citation accuracy">
+    The verifier confirms that:
+    - Every claim in every sub-answer has at least one citation
+    - The quoted text in each citation is genuinely present in the referenced chunk
+    - Citations across sub-answers are consistent (no two citations contradict each other about the same fact)
+
+    If a citation fails verification, the verifier can trigger a targeted retry on the affected sub-question.
+  </Step>
+
+  <Step title="Responder deduplicates and numbers citations">
+    When sub-answers are merged into the final response, identical citations (same `chunkId` and `quote`) are collapsed into a single entry. The remaining citations are assigned sequential `index` values starting at `1`, matching the `[n]` markers embedded in the answer text.
+  </Step>
+</Steps>
+
+---
+
+## Using Citations in Your UI
+
+After calling `agent.query()`, you can display citations inline or render them in a reference list. The `index` value in each `Citation` matches the `[n]` markers in `result.answer`.
+
+```typescript
+const result = await agent.query({ question: "What is our GL limit?" });
+
+console.log(result.answer);
+// "The GL policy has a $1,000,000 per-occurrence limit [1]
+//  with a $2M aggregate [2]."
+
+for (const cite of result.citations) {
+  console.log(`[${cite.index}] ${cite.documentId} — "${cite.quote}"`);
+}
+// [1] policy-abc — "per-occurrence limit of $1,000,000"
+// [2] policy-abc — "aggregate limit of $2,000,000"
+```
+
+<Tip>
+  Use `cite.chunkId` to deep-link into your document viewer, or pass it back to your `documentStore` to retrieve the full surrounding paragraph for additional context.
+</Tip>
+
+### Rendering an Inline Reference List
+
+<CodeGroup>
+
+```tsx React
+function CitationList({ citations }: { citations: Citation[] }) {
+  return (
+    <ol>
+      {citations.map((cite) => (
+        <li key={cite.index}>
+          <strong>[{cite.index}]</strong> {cite.documentId}
+          {cite.documentType && ` (${cite.documentType})`} —{" "}
+          <em>"{cite.quote}"</em>
+          <br />
+          <small>Relevance: {(cite.relevance * 100).toFixed(0)}%</small>
+        </li>
+      ))}
+    </ol>
+  );
+}
+```
+
+```html HTML template
+<ol>
+  {{#each citations}}
+  <li>
+    <strong>[{{index}}]</strong> {{documentId}} —
+    <em>"{{quote}}"</em>
+  </li>
+  {{/each}}
+</ol>
+```
+
+</CodeGroup>
+
+---
+
+## Query Intent Reference
+
+The intent assigned during classification determines which retrieval strategies are prioritised and therefore which kinds of citations you're likely to see in the output.
+
+| Intent | Description | Retrieval focus |
+|---|---|---|
+| `policy_question` | Questions about specific coverage, limits, or deductibles | Coverage and declaration chunks |
+| `coverage_comparison` | Comparing coverages across multiple documents | Coverage chunks from multiple documents |
+| `document_search` | Looking for a document by carrier, number, or name | Structured document lookup |
+| `claims_inquiry` | Questions about claims history or loss experience | Loss history chunks |
+| `general_knowledge` | Insurance concepts not tied to a specific document | Broader chunk search |
+
+<Note>
+  `document_search` queries often produce citations with a `field` path rather than a free-text `quote`, because the retrieval strategy matches structured document metadata rather than prose chunks.
+</Note>
+
+---
+
+## Low Confidence and Missing Citations
+
+When `result.confidence` is below `0.7`, or when `result.reviewReport` flags completeness issues, some claims may have been answered without strong evidence.
+
+<Warning>
+  A low `relevance` score on a citation (below `0.5`) means the retrieval system found a loosely related chunk rather than a direct match. Review those citations carefully before relying on the answer in an automated workflow.
+</Warning>
+
+You can inspect the review report to understand what the verifier found:
+
+```typescript
+const { reviewReport } = await agent.query({ question: "..." });
+
+console.log(reviewReport.groundingStatus);    // "grounded" | "partially_grounded" | "ungrounded"
+console.log(reviewReport.consistencyStatus);  // "consistent" | "conflict_detected"
+console.log(reviewReport.completenessStatus); // "complete" | "partial" | "insufficient_evidence"
+console.log(reviewReport.retryCount);         // number of verification retries triggered
+```

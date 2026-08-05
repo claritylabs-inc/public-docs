@@ -1,0 +1,175 @@
+---
+title: "Durable Mutations and Optimistic Updates"
+sidebarTitle: "Mutations"
+description: "Define durable mutations with optimistic local reducers, server flush functions, and ack/reject handlers for full control over sync state."
+---
+
+Mutations in CL Sync are the mechanism for making changes that need to reach both the local cache and a remote server. Every mutation is written to a durable outbox in IndexedDB before the network call goes out, so your changes survive browser crashes, network drops, and page reloads. A `reducer` applies the change optimistically so your UI responds instantly.
+
+## Mutation lifecycle
+
+When you call `store.enqueueMutation(definition, args)`, CL Sync runs these steps in order:
+
+1. **Reducer** — applies an immediate, synchronous optimistic change to the local cache.
+2. **Outbox write** — serializes `args` to IndexedDB so the mutation survives a reload.
+3. **Flush** — calls your async `flush` function to send the mutation to the server.
+4. **Ack or reject** — on success, calls `onAck`; on failure, calls `onReject` and marks the item `"failed"` in the outbox.
+
+## Defining a mutation
+
+```typescript
+import { defineMutation } from "@claritylabs/cl-sync";
+
+const updatePolicy = defineMutation<
+  { id: string; effectiveDate: string },
+  { updated: true }
+>({
+  name: "policies.update",
+
+  reducer: (store, args) => {
+    // Optimistic: update locally before the network call
+    store.patchRecord("policies", args.id, { effectiveDate: args.effectiveDate });
+  },
+
+  flush: async (args, clientMutationId) => {
+    const response = await fetch(`/api/policies/${args.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ effectiveDate: args.effectiveDate, clientMutationId }),
+    });
+    if (!response.ok) throw new Error(`Update failed: ${response.status}`);
+    return (await response.json()) as { updated: true };
+  },
+
+  onAck: (store, args, result) => {
+    // Optional: apply any server-authoritative changes
+    console.log("Server confirmed update:", result);
+  },
+
+  onReject: (store, args) => {
+    // Roll back the optimistic patch
+    store.patchRecord("policies", args.id, { effectiveDate: undefined });
+  },
+});
+```
+
+## Mutation options
+
+<ParamField path="name" type="string" required>
+  A unique identifier for this mutation. Used as the `mutation` field in `OutboxItem`. Must be stable across deployments so outbox items can be matched to their definitions on replay.
+</ParamField>
+
+<ParamField path="reducer" type="(store: SyncStore, args: TArgs, clientMutationId: string) => void">
+  Runs synchronously and immediately when `enqueueMutation` is called. Apply your optimistic state change here. This function should be fast and side-effect-free beyond writing to the store.
+</ParamField>
+
+<ParamField path="flush" type="(args: TArgs, clientMutationId: string) => Promise<TResult>">
+  Async function that sends the mutation to your server. If it throws, the outbox item is marked `"failed"`. The same `clientMutationId` is used on retries, enabling server-side deduplication.
+</ParamField>
+
+<ParamField path="onAck" type="(store: SyncStore, args: TArgs, result: TResult, clientMutationId: string) => void">
+  Called after `flush` resolves successfully. Use it to apply server-authoritative data that differs from your optimistic update — for example, a server-generated timestamp or computed field.
+</ParamField>
+
+<ParamField path="onReject" type="(store: SyncStore, args: TArgs, error: unknown, clientMutationId: string) => void">
+  Called when `flush` throws. Implement rollback logic here. CL Sync does not automatically revert optimistic changes — you are in full control of conflict resolution.
+</ParamField>
+
+## Enqueuing mutations
+
+Call `store.enqueueMutation` directly or use the `useSyncMutation` hook in React:
+
+<CodeGroup>
+
+```typescript Store (direct)
+await store.enqueueMutation(updatePolicy, {
+  id: "pol-1",
+  effectiveDate: "2026-01-01",
+});
+```
+
+```tsx React hook
+const update = useSyncMutation(updatePolicy);
+
+await update({ id: "pol-1", effectiveDate: "2026-01-01" });
+```
+
+</CodeGroup>
+
+You can pass an explicit `clientMutationId` as the third argument to `enqueueMutation` if you need to coordinate IDs across systems. If omitted, CL Sync generates one automatically.
+
+## Outbox and durability
+
+Mutations persist in IndexedDB until they are either flushed successfully or explicitly removed. Each outbox entry carries full replay metadata:
+
+```typescript
+interface OutboxItem<TArgs> {
+  id: string;                             // clientMutationId
+  mutation: string;                       // matches MutationDefinition.name
+  args: TArgs;
+  scopeKey: string;
+  status: "pending" | "flushing" | "failed";
+  createdAt: number;
+  updatedAt: number;
+  attempts: number;
+  lastError?: string;
+}
+```
+
+On the next page load, replay pending mutations:
+
+```typescript
+await store.hydrate();
+
+// Reconnect definitions so outbox rows can match them by name
+store.registerMutations([updatePolicy, createPolicy]);
+
+// Retry all pending mutations
+await store.flushPendingMutations();
+```
+
+## Flush options
+
+`flushPendingMutations` accepts an options object to control which items are processed:
+
+```typescript
+await store.flushPendingMutations({
+  // Also retry items marked "failed" (default: false)
+  includeFailed: true,
+
+  // Only flush specific mutations
+  mutations: [updatePolicy],
+
+  // Custom predicate — return false to skip an item
+  predicate: (item) => item.attempts < 3,
+});
+```
+
+<Tip>
+  Use `predicate` to implement exponential back-off — skip items whose `attempts` count exceeds your retry budget or whose `lastError` indicates a non-retriable server error (e.g., `400 Bad Request`).
+</Tip>
+
+## Deduplication with `clientMutationId`
+
+CL Sync generates a stable `clientMutationId` for each outbox entry and passes it to both `flush` and `onAck`. The same ID is reused on every retry. Include it in your request body and deduplicate on the server using this ID:
+
+```typescript
+flush: async (args, clientMutationId) => {
+  const response = await fetch("/api/mutations", {
+    method: "POST",
+    body: JSON.stringify({ ...args, clientMutationId }),
+  });
+  // Server stores clientMutationId and returns the same result on duplicate requests
+  return await response.json();
+},
+```
+
+## Viewing the outbox
+
+Inspect all outbox items for the current scope at any time:
+
+```typescript
+const outbox = store.getOutbox();
+const failed = outbox.filter((i) => i.status === "failed");
+console.log(`${failed.length} mutations need attention`);
+```

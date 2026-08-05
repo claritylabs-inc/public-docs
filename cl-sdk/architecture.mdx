@@ -1,0 +1,199 @@
+---
+title: "CL SDK Architecture: Eight Systems, One Evidence Layer"
+sidebarTitle: "Architecture"
+description: "Learn how CL SDK's eight pipeline systems connect through a shared source-grounding layer to produce auditable, citation-backed insurance workflow outputs."
+---
+
+CL SDK is organized into eight cooperating systems. A single source-grounding layer—built around `SourceSpan`, `DocumentSourceNode`, and `PolicyOperationalProfile`—runs through all of them, so every output from extraction through PCE processing can be traced back to a specific location in the original document.
+
+## Design principles
+
+Before diving into individual systems, it helps to understand the four principles that shape every design decision in the SDK:
+
+- **Provider-agnostic** — workflows call plain `GenerateText` and `GenerateObject` callbacks, never a specific client library. You swap providers without touching SDK internals.
+- **Pure TypeScript, no framework dependencies** — the SDK works in Node.js, Bun, Deno, and edge runtimes.
+- **Deterministic scaffold with bounded agentic decision points** — each pipeline follows a fixed set of phases. LLM decisions are confined to clearly identified steps; the surrounding scaffolding is fully deterministic.
+- **Source-grounded outputs** — every extracted field, query answer, and workflow state object cites `sourceNodeIds` or `sourceSpanIds`, giving you a full evidence trail for auditing and compliance.
+
+## The eight systems
+
+### 1. Document extraction pipeline
+
+The extraction pipeline turns a raw PDF into a structured `InsuranceDocument` in three stages:
+
+1. Your parser provides page-level text spans via `buildPageSourceSpans`.
+2. The SDK assembles those spans into a canonical source tree of `DocumentSourceNode` objects.
+3. The extractor runs structured LLM calls to produce an `operationalProfile` and project a compatibility `InsuranceDocument`.
+
+```
+Parser spans → buildPageSourceSpans → Source tree → Operational profile → InsuranceDocument
+```
+
+The source tree is the authoritative evidence layer—every field in the output document links back to specific nodes in it.
+
+### 2. Source grounding
+
+Source grounding is the shared evidence infrastructure that all other systems consume. It defines three core types:
+
+| Type | Role |
+|------|------|
+| `SourceSpan` | A raw text segment from a parsed page, with document ID, page number, and kind |
+| `DocumentSourceNode` | A canonical node in the source tree, with stable ID and parent/child links |
+| `PolicyOperationalProfile` | Structured product facts derived from source nodes, used by query, application, and PCE |
+
+Because query, application, PCE, and case workflows all read from the same source tree, evidence never needs to be re-extracted between pipeline stages.
+
+### 3. Query agent pipeline
+
+The query agent answers natural-language questions about stored documents through five sequential phases:
+
+<Steps>
+  <Step title="Classify">
+    Determine question type, coverage area, and required retrieval strategy.
+  </Step>
+  <Step title="Plan actions">
+    Decide which document stores and source chunks to retrieve, and in what order.
+  </Step>
+  <Step title="Retrieve (parallel)">
+    Fetch source chunks from `DocumentStore`, `MemoryStore`, and `SourceStore` in parallel.
+  </Step>
+  <Step title="Reason (parallel)">
+    Run LLM reasoning passes over retrieved evidence in parallel, each citing source node IDs.
+  </Step>
+  <Step title="Verify → Respond">
+    Verify consistency across reasoning results, then compose the final answer with citations.
+  </Step>
+</Steps>
+
+### 4. Application processing pipeline
+
+The application pipeline processes ACORD forms through five phases and produces a ready-to-collect question batch for the end user:
+
+<Steps>
+  <Step title="Classify">
+    Identify the application form type and applicable LOB codes from the ACORD taxonomy.
+  </Step>
+  <Step title="Extract fields">
+    Run structured extraction against the PDF or Docling input to populate known fields.
+  </Step>
+  <Step title="Plan optional actions">
+    Decide whether cross-document lookups or supplemental extractions are needed.
+  </Step>
+  <Step title="Backfill + auto-fill">
+    Fill missing fields from the operational profile and apply deterministic auto-fill rules.
+  </Step>
+  <Step title="Batch questions → Reply loop → Confirm and map PDF">
+    Group remaining unanswered fields into topic-based question batches, run the reply loop to collect answers, then confirm the completed state and map it back to the PDF form.
+  </Step>
+</Steps>
+
+### 5. Policy Change Endorsements (PCE)
+
+The PCE system handles the full lifecycle of a policy change request, from free-text intake to a structured submission packet:
+
+<Steps>
+  <Step title="Intake">
+    Parse the change request text and identify the affected policy, coverage, and effective date.
+  </Step>
+  <Step title="Collect evidence">
+    Retrieve relevant source nodes and policy facts from the operational profile.
+  </Step>
+  <Step title="Normalize">
+    Map the requested change to standard endorsement codes and coverage fields.
+  </Step>
+  <Step title="Ask for missing info">
+    If required fields are absent, generate targeted clarifying questions.
+  </Step>
+  <Step title="Validate">
+    Check the normalized change against policy rules and coverage constraints.
+  </Step>
+  <Step title="Select execution mode">
+    Choose `auto`, `assisted`, or `manual` processing based on complexity and confidence.
+  </Step>
+  <Step title="Build submission packet">
+    Assemble the final structured packet ready for carrier submission.
+  </Step>
+</Steps>
+
+### 6. Case workflow primitives
+
+Case workflows provide shared building blocks used across proposals, evidence tracking, and validation tasks:
+
+- **Stable IDs** — deterministic identifier generation for cases, evidence items, and proposals.
+- **Evidence management** — attach, retrieve, and version source-backed evidence objects.
+- **Validation** — run rule-based and LLM-assisted validation against case state.
+- **Proposals** — create, revise, and confirm structured change proposals before committing them.
+
+### 7. Agent prompt system
+
+`buildAgentSystemPrompt(ctx)` composes a channel-aware system prompt from eight sections. You pass a context object describing the agent's channel, identity, and configured capabilities; the function assembles the sections that apply.
+
+| Section | What it adds |
+|---------|-------------|
+| Identity | Agent name, role, and brokerage context |
+| Intent | Primary goal and scope of the agent |
+| Formatting | Channel-specific output formatting rules (Markdown vs. plain text vs. Slack mrkdwn) |
+| Safety | Guardrails, escalation rules, and out-of-scope deflection |
+| Coverage gaps | Instructions for surfacing missing coverage to the insured |
+| COI routing | Certificate of Insurance request handling and routing rules |
+| Quotes / policies | How to present quote options and policy details |
+| Memory | Conversation memory recall and context window management |
+
+<Tip>
+  The formatting section automatically adapts to the channel. Email agents get full Markdown; SMS agents get plain text with a strict character-count awareness; Slack and Discord agents use their respective markup dialects.
+</Tip>
+
+### 8. Storage interfaces
+
+CL SDK defines four storage interfaces that keep your persistence layer swappable:
+
+<CardGroup cols={2}>
+  <Card title="DocumentStore" icon="file">
+    Stores and retrieves structured `InsuranceDocument` objects and their metadata.
+  </Card>
+  <Card title="MemoryStore" icon="brain">
+    Manages conversation memory with optional vector retrieval via `embedText`.
+  </Card>
+  <Card title="SourceStore" icon="database">
+    Persists source trees and source chunks for retrieval by the query agent.
+  </Card>
+  <Card title="ApplicationStore" icon="clipboard">
+    Tracks application pipeline state, question batches, and reply loop progress.
+  </Card>
+</CardGroup>
+
+A SQLite reference implementation ships with the SDK and satisfies all four interfaces. Use it for development, testing, or small deployments; replace it with your own implementation for production scale.
+
+## System interaction map
+
+The diagram below shows how data flows between systems at runtime:
+
+```
+PDF / Docling input
+       │
+       ▼
+[1] Extraction pipeline ──── sourceSpans ──→ [2] Source grounding layer
+       │                                            │
+       │ InsuranceDocument                          │ SourceTree / OperationalProfile
+       ▼                                            │
+  DocumentStore  ◄───────────────────────────────────┤
+       │                                            │
+       ├──────────────→ [3] Query agent             │
+       │                       │ citations          │
+       │                       ▼                    │
+       │                  query result              │
+       │                                            │
+       ├──────────────→ [4] Application pipeline ←──┤
+       │                       │ state              │
+       │                       ▼                    │
+       │                 question batches           │
+       │                                            │
+       └──────────────→ [5] PCE agent ←─────────────┘
+                               │
+                               ▼
+                       submission packet
+```
+
+<Note>
+  Systems 6 (Case workflows), 7 (Agent prompts), and 8 (Storage) are horizontal utilities consumed by the pipelines above rather than sequential pipeline stages themselves.
+</Note>

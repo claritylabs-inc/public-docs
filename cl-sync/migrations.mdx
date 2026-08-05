@@ -1,0 +1,207 @@
+---
+title: "Schema Migrations for Scoped Local Data"
+sidebarTitle: "Migrations"
+description: "Write versioned migrations that run during hydrate() to rename fields, transform records, prune outbox entries, and evolve your local IndexedDB schema safely."
+---
+
+As your application evolves, the shape of your local data needs to evolve too. CL Sync's migration system lets you write versioned, data-level transformations that run automatically during `store.hydrate()` when the persisted schema version lags behind the configured version. Migrations have full read/write access to records, collection states, outbox items, and metadata.
+
+## How migrations run
+
+When `hydrate()` finds that the persisted schema version is less than `schema.version`, it runs each migration whose `version` number falls in the range `(persistedVersion, configuredVersion]`, in ascending order. After all migrations complete, the new schema version is written to IndexedDB.
+
+<Note>
+  `hydrate()` throws a version mismatch error if the **persisted** schema version is **newer** than the configured one. This guards against data corruption when a user opens an older version of your app after upgrading. Always bump `schema.version` before shipping schema changes.
+</Note>
+
+## The migration context
+
+Every migration receives a `SyncMigrationContext` that exposes typed read/write helpers for every table CL Sync manages:
+
+```typescript
+interface SyncMigrationContext {
+  scopeKey: string;
+  fromVersion: number;
+  toVersion: number;
+  schema: SyncSchemaMetadata;
+  now: () => number;
+
+  // Records
+  getRecords: (collection: string) => SyncRecord[];
+  setRecord: (collection: string, id: SyncId, record: SyncRecord) => void;
+  deleteRecord: (collection: string, id: SyncId) => void;
+
+  // Collection states (index metadata)
+  getCollectionStates: () => CollectionState[];
+  setCollectionState: (state: CollectionState) => void;
+  deleteCollectionState: (key: string) => void;
+
+  // Outbox
+  getOutbox: () => OutboxItem[];
+  setOutboxItem: (item: OutboxItem) => void;
+  deleteOutboxItem: (id: string) => void;
+
+  // Metadata
+  getMeta: <T>(key: string) => T | undefined;
+  setMeta: (key: string, value: unknown) => void;
+  deleteMeta: (key: string) => void;
+}
+```
+
+## Defining migrations
+
+Declare an array of `SyncMigration` objects and pass them to `createSyncStore`. Each migration's `version` is the version it migrates **to**.
+
+```typescript
+import { createSyncStore } from "@claritylabs/cl-sync";
+
+const store = createSyncStore({
+  scope: { appId: "my-app", userId: currentUser.id },
+  schema: { version: 2 },
+  migrations: [
+    {
+      version: 2,
+      name: "rename text to title",
+      migrate: (ctx) => {
+        for (const record of ctx.getRecords("todos")) {
+          if (
+            typeof (record as any).text === "string" &&
+            typeof (record as any).title !== "string"
+          ) {
+            ctx.setRecord("todos", record.id as string, {
+              ...record,
+              title: (record as any).text,
+            });
+          }
+        }
+      },
+    },
+  ],
+});
+```
+
+## Migration examples
+
+### Rename a field
+
+```typescript
+{
+  version: 2,
+  name: "rename text to title",
+  migrate: (ctx) => {
+    for (const record of ctx.getRecords("todos")) {
+      const r = record as any;
+      if (typeof r.text === "string" && typeof r.title !== "string") {
+        ctx.setRecord("todos", r.id, { ...r, title: r.text });
+      }
+    }
+  },
+}
+```
+
+### Backfill a computed field
+
+```typescript
+{
+  version: 3,
+  name: "backfill fullName on users",
+  migrate: (ctx) => {
+    for (const record of ctx.getRecords("users")) {
+      const r = record as any;
+      if (!r.fullName && r.firstName && r.lastName) {
+        ctx.setRecord("users", r.id, {
+          ...r,
+          fullName: `${r.firstName} ${r.lastName}`,
+        });
+      }
+    }
+  },
+}
+```
+
+### Prune stale outbox entries
+
+```typescript
+{
+  version: 4,
+  name: "drop outbox items for deleted mutation",
+  migrate: (ctx) => {
+    for (const item of ctx.getOutbox()) {
+      if (item.mutation === "todos.legacyCreate") {
+        ctx.deleteOutboxItem(item.id);
+      }
+    }
+  },
+}
+```
+
+### Move collection state after rename
+
+If you rename a collection, delete the old collection state so CL Sync doesn't treat the stale key as valid:
+
+```typescript
+{
+  version: 5,
+  name: "rename collection: tasks → todos",
+  migrate: (ctx) => {
+    // Migrate records
+    for (const record of ctx.getRecords("tasks")) {
+      ctx.setRecord("todos", record.id as string, record);
+      ctx.deleteRecord("tasks", record.id as string);
+    }
+    // Clean up collection states
+    for (const state of ctx.getCollectionStates()) {
+      if (state.collection === "tasks") {
+        ctx.deleteCollectionState(state.key);
+      }
+    }
+  },
+}
+```
+
+## Full example
+
+Here's a store configured with two sequential migrations:
+
+```typescript
+const store = createSyncStore({
+  scope: {
+    appId: "claims-app",
+    environment: import.meta.env.MODE,
+    userId: currentUser.id,
+  },
+  schema: { version: 3 },
+  migrations: [
+    {
+      version: 2,
+      name: "rename text to title",
+      migrate: (ctx) => {
+        for (const record of ctx.getRecords("todos")) {
+          const r = record as any;
+          if (typeof r.text === "string") {
+            ctx.setRecord("todos", r.id, { ...r, title: r.text });
+          }
+        }
+      },
+    },
+    {
+      version: 3,
+      name: "backfill completedAt timestamp",
+      migrate: (ctx) => {
+        for (const record of ctx.getRecords("todos")) {
+          const r = record as any;
+          if (r.completed && !r.completedAt) {
+            ctx.setRecord("todos", r.id, { ...r, completedAt: ctx.now() });
+          }
+        }
+      },
+    },
+  ],
+});
+```
+
+If a user's persisted version is `1`, both migrations run in order on the next `hydrate()` call. If their persisted version is already `2`, only the version-3 migration runs.
+
+<Warning>
+  Migrations run synchronously inside `hydrate()`. Keep them fast — avoid network requests or heavy computation. If you need to fetch fresh data after a migration, do so after `hydrate()` resolves.
+</Warning>

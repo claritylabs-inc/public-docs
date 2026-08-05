@@ -1,0 +1,159 @@
+---
+title: "Writing Phases for Durable Pipelines"
+sidebarTitle: "Phases"
+description: "Learn the Phase shape, PhaseContext methods, PhaseResult variants, and how to use ctx.saveState for crash-safe mid-phase checkpointing."
+---
+
+A phase is the core building block of a `cl-pipelines` pipeline. Each phase is a plain TypeScript object with a name and a `run` function — no classes, no decorators, no inheritance. Because phases are stateless objects, you can define them at module scope, pass them around, and test them in isolation without any special setup.
+
+## Phase shape
+
+```typescript
+type Phase<TState> = {
+  name: string;  // unique within the phases array
+  run: (ctx: PhaseContext<TState>) => Promise<PhaseResult<TState>>;
+};
+```
+
+The `name` field is how the library looks up a phase from the checkpoint. It must be unique within the array you pass to `runPipeline` or `advancePhase` — if two phases share a name, the first match wins.
+
+## PhaseContext
+
+Your `run` function receives a `PhaseContext<TState>` with everything it needs to read state, write logs, and persist mid-phase progress:
+
+```typescript
+type PhaseContext<TState> = {
+  jobId: string;
+  checkpoint: Checkpoint<TState>;  // .state contains TState from previous phase
+  log: (message: string, level?: "info" | "warn" | "error") => Promise<void>;
+  saveState: (state: TState) => Promise<void>;  // persist mid-phase progress
+};
+```
+
+<ParamField path="jobId" type="string">
+  The ID of the currently running job. Useful if your phase needs to look up related records by the same ID.
+</ParamField>
+
+<ParamField path="checkpoint" type="Checkpoint<TState>">
+  The checkpoint as it existed when this phase started. Read `checkpoint.state` to access state passed from the previous phase (or `initialState` on the first run).
+</ParamField>
+
+<ParamField path="log" type="(message: string, level?: string) => Promise<void>">
+  Appends a `LogEntry` to the job's log via `StorageAdapter.appendLog`. Default level is `"info"`. Log entries are visible through the UI components and `storage._inspect()` in tests.
+</ParamField>
+
+<ParamField path="saveState" type="(state: TState) => Promise<void>">
+  Writes a new checkpoint mid-phase. The stored checkpoint will have `nextPhase` set to the **current** phase name, so a crash and re-run re-enters this phase from the saved position. Use this inside loops over large datasets.
+</ParamField>
+
+## PhaseResult
+
+Every `run` function must return one of three variants:
+
+```typescript
+type PhaseResult<TState> =
+  | { kind: "next"; nextPhase: string; state: TState }  // advance to next phase
+  | { kind: "done" }                                    // pipeline complete
+  | { kind: "error"; error: string };                   // set status: "error"
+```
+
+<Tabs>
+  <Tab title="kind: next">
+    Return `{ kind: "next", nextPhase, state }` to advance to another phase. The `nextPhase` string must match a phase `name` in your array. The `state` value becomes `ctx.checkpoint.state` in the next phase.
+
+    ```typescript
+    return {
+      kind: "next",
+      nextPhase: "enrich",
+      state: { ...ctx.checkpoint.state, wordCount: 42 },
+    };
+    ```
+  </Tab>
+  <Tab title="kind: done">
+    Return `{ kind: "done" }` when the pipeline has finished all work. The library sets `status: "complete"` and clears the checkpoint.
+
+    ```typescript
+    return { kind: "done" };
+    ```
+  </Tab>
+  <Tab title="kind: error">
+    Return `{ kind: "error", error }` to signal a handled failure. The library sets `status: "error"` and preserves the checkpoint for resume. Use this for expected failure cases (e.g. validation failures, external API errors you've already logged).
+
+    ```typescript
+    return { kind: "error", error: "Document validation failed: missing required field 'title'" };
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Throwing an exception from `run` has the same effect as returning `{ kind: "error" }` — status is set to `"error"` and the checkpoint is preserved. You don't need to wrap every async call in try/catch unless you want to produce a richer error message.
+</Note>
+
+## Mid-phase checkpointing with ctx.saveState
+
+For phases that process large datasets in a loop, you can call `ctx.saveState()` after each item (or batch). If the process crashes, the next run re-enters the **same phase** from the last saved position rather than starting the whole phase over.
+
+```typescript
+import type { Phase } from "@claritylabs/cl-pipelines";
+
+type ProcessState = {
+  items: string[];
+  results: string[];
+  chunkIndex: number;
+};
+
+const processItems: Phase<ProcessState> = {
+  name: "processItems",
+  run: async (ctx) => {
+    const { items, chunkIndex } = ctx.checkpoint.state;
+    let current = {
+      results: [...ctx.checkpoint.state.results],
+      chunkIndex,
+    };
+
+    for (let i = chunkIndex; i < items.length; i++) {
+      const output = await expensiveTransform(items[i]);
+      current.results.push(output);
+      current.chunkIndex = i + 1;
+
+      // Save progress after every item — a crash resumes from here
+      await ctx.saveState({ items, ...current });
+      await ctx.log(`processed item ${i + 1} of ${items.length}`);
+    }
+
+    return {
+      kind: "next",
+      nextPhase: "finalize",
+      state: { items, ...current },
+    };
+  },
+};
+```
+
+When `saveState` is called, the stored checkpoint has `nextPhase` set to `"processItems"` — so a crash and re-run enters the same phase with the saved `chunkIndex`, skipping already-processed items.
+
+<Tip>
+  Always initialize `chunkIndex` (or equivalent) in your `TState` type and read it from `ctx.checkpoint.state` at the start of your loop. That way the phase is idempotent whether it starts fresh or resumes mid-loop.
+</Tip>
+
+## Testing a phase in isolation
+
+Because phases are plain objects, you can call `run` directly in a test with a fake context:
+
+```typescript
+import { processItems } from "./phases";
+
+const ctx = {
+  jobId: "test-job",
+  checkpoint: {
+    nextPhase: "processItems",
+    state: { items: ["a", "b"], results: [], chunkIndex: 0 },
+    createdAt: Date.now(),
+  },
+  log: async (msg) => console.log(msg),
+  saveState: async (state) => { /* capture for assertion */ },
+};
+
+const result = await processItems.run(ctx);
+// assert result.kind === "next", result.state.results.length === 2, etc.
+```

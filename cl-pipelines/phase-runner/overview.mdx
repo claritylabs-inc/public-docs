@@ -1,0 +1,137 @@
+---
+title: "How runPipeline and advancePhase Work"
+sidebarTitle: "Pipelines"
+description: "Understand the full lifecycle of a pipeline run — from runPipeline seeding state to advancePhase executing each phase and writing checkpoints."
+---
+
+`runPipeline` and `advancePhase` are the two functions at the heart of the execution model. Understanding what each one does — and what it deliberately does *not* do — helps you reason about crash safety, retry behavior, and how to wire them into your scheduler.
+
+## What runPipeline does
+
+`runPipeline` is intentionally thin. It does **not** execute any phase directly. When you call it, the library:
+
+1. Resolves the starting phase (from `initialPhase`, the first element of `phases`, or the existing checkpoint's `nextPhase` if resuming)
+2. Writes `status: "running"` and the initial checkpoint to your `StorageAdapter`
+3. Calls `scheduler.scheduleAdvance(jobId, 0)` to enqueue the first phase execution
+
+This design means `runPipeline` is safe to call from a web request handler or UI action — it returns quickly and defers all execution to the scheduler.
+
+## What advancePhase does
+
+`advancePhase` is the worker function. Your scheduler calls it once per phase. It:
+
+1. Reads the checkpoint via `storage.getJob(jobId)`
+2. Finds the matching `Phase` by `checkpoint.nextPhase`
+3. Calls `phase.run(ctx)` with a fully constructed `PhaseContext`
+4. Handles the result:
+   - `kind: "next"` — writes new checkpoint + calls `scheduleAdvance(jobId, 0)` for the next phase
+   - `kind: "done"` — calls `setCheckpoint(jobId, null)` + sets `status: "complete"`
+   - `kind: "error"` or thrown exception — sets `status: "error"` (checkpoint is **not** modified)
+
+## RunPipelineArgs
+
+```typescript
+type RunPipelineArgs<TState> = {
+  jobId: string;
+  phases: Phase<TState>[];          // ordered array, must be non-empty
+  storage: StorageAdapter<TState>;
+  scheduler: SchedulerAdapter;
+  retryMode?: "resume" | "full";    // default: "resume" if checkpoint exists
+  initialState: TState;
+  initialPhase?: string;            // override first phase name
+};
+```
+
+<ParamField path="jobId" type="string" required>
+  Unique identifier for this pipeline run. Use a database row ID, UUID, or any string that's stable across retries.
+</ParamField>
+
+<ParamField path="phases" type="Phase<TState>[]" required>
+  Ordered array of phase definitions. Must contain at least one phase. Phase names must be unique within the array.
+</ParamField>
+
+<ParamField path="storage" type="StorageAdapter<TState>" required>
+  The storage adapter that persists job status, checkpoints, and log entries.
+</ParamField>
+
+<ParamField path="scheduler" type="SchedulerAdapter" required>
+  The scheduler adapter that triggers `advancePhase` after each phase completes.
+</ParamField>
+
+<ParamField path="retryMode" type='"resume" | "full"'>
+  Controls how an existing checkpoint is handled. Defaults to `"resume"` when a checkpoint exists. See [Retry Modes](/cl-pipelines/phase-runner/retry-modes).
+</ParamField>
+
+<ParamField path="initialState" type="TState" required>
+  The starting state passed to the first phase. Used as-is on a fresh run; ignored on `"resume"` (checkpoint state takes precedence).
+</ParamField>
+
+<ParamField path="initialPhase" type="string">
+  Override which phase runs first. Defaults to the name of `phases[0]`.
+</ParamField>
+
+## Full example
+
+The following example runs a two-phase document processing pipeline end-to-end using the in-memory adapters:
+
+```typescript
+import type { Phase } from "@claritylabs/cl-pipelines";
+import {
+  runPipeline,
+  advancePhase,
+  createMemoryStorage,
+  createMemoryScheduler,
+} from "@claritylabs/cl-pipelines";
+
+type DocState = { text: string; wordCount?: number };
+
+const extract: Phase<DocState> = {
+  name: "extract",
+  run: async (ctx) => {
+    const words = ctx.checkpoint.state.text.split(/\s+/).length;
+    await ctx.log(`extracted ${words} words`);
+    return {
+      kind: "next",
+      nextPhase: "summarise",
+      state: { ...ctx.checkpoint.state, wordCount: words },
+    };
+  },
+};
+
+const summarise: Phase<DocState> = {
+  name: "summarise",
+  run: async (ctx) => {
+    await ctx.log(`summarising ${ctx.checkpoint.state.wordCount} words`);
+    return { kind: "done" };
+  },
+};
+
+const storage = createMemoryStorage<DocState>();
+const scheduler = createMemoryScheduler();
+
+scheduler._bind((jobId) =>
+  advancePhase({ jobId, phases: [extract, summarise], storage, scheduler })
+);
+
+await runPipeline({
+  jobId: "doc-42",
+  phases: [extract, summarise],
+  storage,
+  scheduler,
+  initialState: { text: "Hello world" },
+});
+
+await scheduler.drain();
+```
+
+<Tip>
+  Because `runPipeline` only writes state and enqueues a scheduler event, you can call it safely from serverless functions, HTTP handlers, or UI mutations without worrying about execution timeouts.
+</Tip>
+
+## Crash recovery
+
+If your process dies while `advancePhase` is running, the checkpoint still holds the last safe state (either from the previous phase or the last `ctx.saveState()` call within the current phase). Re-calling `runPipeline` with `retryMode: "resume"` picks up from there. See [Checkpoints](/cl-pipelines/phase-runner/checkpoints) for the exact write semantics.
+
+<Warning>
+  Never call `advancePhase` directly from application code in production. Always invoke it from your `SchedulerAdapter` implementation so that retries and crash recovery work correctly.
+</Warning>

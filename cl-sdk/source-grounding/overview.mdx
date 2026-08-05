@@ -1,0 +1,122 @@
+---
+title: "Source Grounding: Evidence Layer for All Workflows"
+sidebarTitle: "Overview"
+description: "Source grounding is the shared evidence layer used by extraction, query, application, PCE, and case workflows in CL SDK."
+---
+
+Source grounding gives every CL SDK workflow a stable, verifiable evidence foundation. Instead of relying on free-form LLM output, all extraction, query, PCE, and case workflows anchor their results to discrete source units — spans, nodes, and chunks — that trace directly back to the original document text. When a coverage limit or exclusion clause appears in an output, you can always point to the exact page, section, and quoted text that produced it.
+
+## Core Objects
+
+<CardGroup cols={2}>
+  <Card title="SourceSpan" icon="text-size">
+    The smallest addressable source unit. Stores source kind, text, page range, optional section and form metadata, a stable hash, and optional bounding boxes.
+  </Card>
+  <Card title="DocumentSourceNode" icon="sitemap">
+    The canonical retrieval and hierarchy unit. Groups spans into typed nodes: document, page_group, form, endorsement, section, schedule, clause, table, row, cell, and text.
+  </Card>
+  <Card title="PolicyOperationalProfile" icon="shield-check">
+    A source-backed projection of product-critical facts — limits, retentions, lines of business, and effective dates — each tied to a quoted span.
+  </Card>
+  <Card title="SourceChunk" icon="puzzle-piece">
+    A compatibility retrieval window used for vector search and RAG pipelines. Produced by chunking spans with configurable overlap.
+  </Card>
+</CardGroup>
+
+`SourceStore` persists spans and chunks and implements the `SourceRetriever` interface used by agents and pipelines.
+
+## Minimal Setup
+
+The example below shows the complete path from raw page text to a grounded extraction result.
+
+```typescript
+import {
+  MemorySourceStore,
+  buildPageSourceSpans,
+  createExtractor,
+} from "@claritylabs/cl-sdk";
+
+const sourceSpans = buildPageSourceSpans([
+  {
+    documentId: "policy-123",
+    sourceKind: "policy_pdf",
+    pageNumber: 1,
+    text: "Commercial General Liability Declarations...",
+  },
+]);
+
+const sourceStore = new MemorySourceStore();
+const extractor = createExtractor({ generateObject, sourceStore });
+
+const result = await extractor.extract("base64-pdf", "policy-123", {
+  sourceSpans,
+  coverageRecovery: { enabled: true },
+});
+```
+
+Every field in `result` that carries a quoted value traces back to a span ID in `sourceSpans`. You can pass those IDs to `sourceStore.getSourceSpan()` to retrieve the original text at any point downstream.
+
+## Architecture
+
+```
+Raw PDF / Email / Attachment
+        │
+        ▼
+  buildPageSourceSpans / buildSectionSourceSpans / buildTextSourceSpans
+        │
+        ▼
+    SourceSpan[]  ──────────────────────────────────────────────┐
+        │                                                        │
+        ▼                                                        ▼
+  chunkSourceSpans                                     DocumentSourceNode
+        │                                              (parser-grounded)
+        ▼
+    SourceChunk[]
+        │
+        ▼
+   SourceStore  (MemorySourceStore / your DB implementation)
+        │
+        ├──▶ Extractor  (grounded field extraction)
+        ├──▶ Query Agent  (evidence-cited answers)
+        ├──▶ PCE Agent  (change-request evidence)
+        └──▶ Case Workflow  (proposal citations)
+```
+
+## Design Rules
+
+Following these rules keeps your evidence layer trustworthy across every workflow that reads from it.
+
+<Steps>
+  <Step title="Keep spans stable">
+    Span IDs should change only when the underlying source text changes. Stable IDs let downstream workflows cache evidence lookups and detect genuine document changes.
+  </Step>
+  <Step title="Keep source nodes parser-grounded">
+    LLM organization may label or group existing node IDs, but must not invent text, pages, spans, or bounding boxes. Every node must trace to real parsed content.
+  </Step>
+  <Step title="Prefer title-derived section hierarchy">
+    Build your section tree from document headings, not page-by-page outlines. Title-derived hierarchy produces more meaningful retrieval and better coverage gap detection.
+  </Step>
+  <Step title="Keep quote text verifiable">
+    Quote text should be short enough to verify quickly, but long enough to uniquely identify the policy language. Aim for one to three sentences per span.
+  </Step>
+  <Step title="Treat operational profiles as projections">
+    `PolicyOperationalProfile` values are materialized views of what the source nodes and spans say. The source is canonical — the profile is derived.
+  </Step>
+</Steps>
+
+## What Connects Here
+
+<CardGroup cols={2}>
+  <Card title="Source Spans" icon="layer-group" href="/cl-sdk/source-grounding/source-spans">
+    Learn how to build and structure SourceSpan objects from PDF pages, sections, tables, and free text.
+  </Card>
+  <Card title="Retrieval" icon="magnifying-glass" href="/cl-sdk/source-grounding/retrieval">
+    Search spans and nodes using SourceRetriever with configurable retrieval modes.
+  </Card>
+  <Card title="Storage Overview" icon="database" href="/cl-sdk/storage/overview">
+    Persist spans, chunks, and documents using provider-agnostic storage interfaces.
+  </Card>
+  <Card title="API Reference" icon="code" href="/cl-sdk/reference/api">
+    Full reference for source grounding builder functions and store factory.
+  </Card>
+</CardGroup>

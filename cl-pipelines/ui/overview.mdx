@@ -1,0 +1,110 @@
+---
+title: "Headless Pipeline Status UI Components"
+sidebarTitle: "Overview"
+description: "Ship pipeline status, progress logs, and retry buttons using headless React 18+ components from @claritylabs/cl-pipelines/ui with full styling control."
+---
+
+`@claritylabs/cl-pipelines/ui` ships headless UI primitives for displaying pipeline job status in your React application. "Headless" means no bundled styles, no design tokens, and no CSS — you bring your own Tailwind classes, CSS modules, or styled-components. The components provide the structure, accessibility attributes, and data attributes you need to target with any styling approach.
+
+All components require React 18 or later.
+
+## Installation
+
+The UI package is part of `@claritylabs/cl-pipelines`. Import from the sub-path:
+
+```typescript
+import { StatusBanner, ProgressLog, RetryButtons } from "@claritylabs/cl-pipelines/ui";
+```
+
+## Available components
+
+| Export | Purpose |
+|--------|---------|
+| `StatusBanner` | Compound component for job status: indicator, title, description, and action slot |
+| `ProgressLog` | Scrollable list of `LogEntry` items with optional filtering |
+| `RetryButtons` | Resume and restart buttons with a pluggable render function |
+
+## Data attributes for CSS targeting
+
+Every component exposes `data-*` attributes so you can target them from CSS without relying on internal class names:
+
+| Attribute | Component | Values |
+|-----------|-----------|--------|
+| `data-status` | `StatusBanner.Root` | `"running"` \| `"paused"` \| `"error"` |
+| `data-indicator` | `StatusBanner.Indicator` | same |
+| `data-role` | most primitives | `"title"` \| `"description"` \| `"actions"` \| `"progress-log"` \| `"retry-buttons"` |
+| `data-level` | `ProgressLog` list items | `"info"` \| `"warn"` \| `"error"` |
+| `data-phase` | `ProgressLog` list items | phase name string |
+| `data-retry-mode` | `RetryButtons` buttons | `"resume"` \| `"full"` |
+
+## Visibility behavior
+
+`StatusBanner.Root` renders `null` when `status` is `"idle"`, `"complete"`, or `undefined`. You don't need to write conditional rendering logic — just always render the component and let it manage its own visibility:
+
+```tsx
+// ✅ No conditional needed
+<StatusBanner status={job.status} error={job.error} log={job.log}>
+  ...
+</StatusBanner>
+
+// ❌ Unnecessary conditional
+{(job.status === "running" || job.status === "error") && (
+  <StatusBanner status={job.status} ...>...</StatusBanner>
+)}
+```
+
+## Basic usage example
+
+The following shows a complete pipeline status widget using all three components together:
+
+```tsx
+import { StatusBanner, ProgressLog, RetryButtons } from "@claritylabs/cl-pipelines/ui";
+
+function PipelineStatus({ jobId }) {
+  const job = useJob(jobId); // your hook to read job state
+
+  return (
+    <StatusBanner status={job.status} error={job.error} log={job.log}>
+      <StatusBanner.Indicator />
+      <StatusBanner.Title />
+      <StatusBanner.Description />
+      <StatusBanner.Actions>
+        <RetryButtons onRetry={(mode) => retryJob(jobId, mode)} />
+      </StatusBanner.Actions>
+    </StatusBanner>
+  );
+}
+```
+
+<Note>
+  `useJob` is your own data-fetching hook. With Convex, this would be a `useQuery(api.applications.getJob, { jobId })` call. The UI components accept plain props — they don't know about your data layer.
+</Note>
+
+## Adding a progress log
+
+`ProgressLog` renders outside `StatusBanner` and accepts `LogEntry[]` directly:
+
+```tsx
+function PipelineWidget({ jobId }) {
+  const job = useJob(jobId);
+
+  return (
+    <div>
+      <StatusBanner status={job.status} error={job.error}>
+        <StatusBanner.Indicator />
+        <StatusBanner.Title />
+        <StatusBanner.Description />
+        <StatusBanner.Actions>
+          <RetryButtons onRetry={(mode) => retryJob(jobId, mode)} />
+        </StatusBanner.Actions>
+      </StatusBanner>
+
+      <ProgressLog entries={job.log} limit={5} />
+    </div>
+  );
+}
+```
+
+<Tip>
+  See the [Components reference](/cl-pipelines/ui/components) for the full prop API for each component, including custom render functions for buttons and log entries.
+</Tip>

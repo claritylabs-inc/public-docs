@@ -1,0 +1,85 @@
+---
+title: "CL Sync: Local-First React Sync Library"
+sidebarTitle: "Overview"
+description: "CL Sync hydrates your React app instantly from IndexedDB and reconciles with your server in the background — zero loading spinners."
+---
+
+CL Sync (`@claritylabs/cl-sync`) is a local-first browser sync library that makes your React app feel instant. On every page load, your UI hydrates from a scoped IndexedDB cache before any network request completes, then quietly reconciles with the server in the background. Mutations are written to a durable outbox so they survive page reloads and can be retried automatically.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Instant hydration" icon="bolt">
+    Records load from IndexedDB on boot — no waiting for a server response before rendering.
+  </Card>
+  <Card title="Scoped persistence" icon="database">
+    Data is isolated by `appId`, `environment`, `userId`, and `orgId`. Switching users or orgs creates a completely separate IndexedDB scope.
+  </Card>
+  <Card title="Optimistic mutations" icon="arrow-up">
+    A `reducer` applies your mutation locally before the network call. A durable outbox tracks every mutation through reloads and retries.
+  </Card>
+  <Card title="React hooks" icon="react">
+    `useSyncCollection`, `useSyncRecord`, `useSyncMutation`, and `useSyncStatus` give you reactive, type-safe access to all sync state.
+  </Card>
+  <Card title="Convex adapter" icon="plug">
+    First-class support for Convex: subscribe to real-time queries, wrap Convex mutations, and let the adapter handle snapshot diffing.
+  </Card>
+  <Card title="Schema migrations" icon="arrows-rotate">
+    Declare versioned migrations that run during `hydrate()`. Rename fields, transform records, and prune stale outbox entries safely.
+  </Card>
+</CardGroup>
+
+## How scoping works
+
+Every store is tied to a **scope object**:
+
+```typescript
+{
+  appId: string;       // required — identifies your application
+  environment?: string; // e.g. "production" | "staging" | import.meta.env.MODE
+  userId?: string;     // isolates data per authenticated user
+  orgId?: string;      // further isolates data per organization
+}
+```
+
+CL Sync calls `createScopeKey(scope)` to derive a composite key like `"todo-app:production:user-123:org-456"`. Each unique scope key maps to its own IndexedDB database. When you swap `userId` (logout → login), the store automatically works against a fresh scope — no manual cleanup required.
+
+## Package structure
+
+CL Sync ships three sub-path exports so you only pay for what you import:
+
+| Import path | Contents |
+|---|---|
+| `@claritylabs/cl-sync` (or `/core`) | `createSyncStore`, `defineCollection`, `defineMutation`, outbox, schema, migrations |
+| `@claritylabs/cl-sync/react` | `SyncProvider`, all React hooks |
+| `@claritylabs/cl-sync/convex` | `defineConvexCollection`, `defineConvexMutation`, `subscribeConvexCollection` |
+
+Peer dependencies are all optional — install only what you need:
+
+| Peer | Version |
+|---|---|
+| `react` | `>=18.0.0` |
+| `convex` | `>=1.30.0` |
+
+## Install
+
+```bash
+npm install @claritylabs/cl-sync
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/cl-sync/quickstart">
+    Build a working todo app in five steps.
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/cl-sync/concepts">
+    Understand scopes, collections, the outbox, and optimistic updates.
+  </Card>
+  <Card title="Store API" icon="server" href="/cl-sync/store">
+    Full reference for `createSyncStore` and all store methods.
+  </Card>
+  <Card title="Convex Adapter" icon="plug" href="/cl-sync/convex-adapter">
+    Wire up real-time Convex queries and mutations.
+  </Card>
+</CardGroup>

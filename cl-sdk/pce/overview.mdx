@@ -1,0 +1,144 @@
+---
+title: "Policy Change Endorsement Workflows"
+sidebarTitle: "Overview"
+description: "Turn natural-language change requests into structured, reviewable carrier work with the CL SDK Policy Change Endorsement agent and submission tooling."
+---
+
+The Policy Change Endorsement (PCE) agent converts natural-language change requests — adding a vehicle, updating a named insured, adjusting a coverage limit — into typed, grounded, reviewable carrier work. Instead of free-form emails to a carrier, you get structured `PolicyChangeItem` arrays with evidence citations, validation issues, and ready-to-review submission packets.
+
+PCE workflows are designed to assist licensed users, not replace their review. The SDK surfaces missing information, flags validation problems, and generates draft artifacts — final submission authority always rests with a licensed professional.
+
+## Capabilities
+
+<CardGroup cols={2}>
+  <Card title="Change Parsing" icon="list-check">
+    Parse a free-text request into typed `PolicyChangeItem[]` with field paths, proposed values, action types, and source citations.
+  </Card>
+  <Card title="Evidence Retrieval" icon="magnifying-glass">
+    Retrieve policy and conversation evidence through a `SourceRetriever` to ground each change item in real document text.
+  </Card>
+  <Card title="Missing Info Detection" icon="circle-question">
+    Automatically identify required fields that aren't present and surface targeted questions for the requesting user.
+  </Card>
+  <Card title="Impact Summary" icon="chart-bar">
+    Build a human-readable policy impact summary covering coverage changes, premium implications, and underwriting flags.
+  </Card>
+  <Card title="Execution Mode Selection" icon="sliders">
+    Choose between `deterministic_tree`, `market_eval`, or `hybrid` — or let the SDK pick based on case complexity.
+  </Card>
+  <Card title="Submission Artifacts" icon="file-export">
+    Generate carrier-ready submission packets with citations, a validation report, email drafts, and an underwriter summary.
+  </Card>
+</CardGroup>
+
+---
+
+## Quick Start
+
+Create a PCE agent, process a change request, handle any missing-info questions, and generate a submission packet.
+
+```typescript
+import { createPceAgent, MemorySourceStore } from "@claritylabs/cl-sdk";
+
+const sourceRetriever = new MemorySourceStore();
+
+const pce = createPceAgent({
+  generateObject,
+  sourceRetriever,
+  executionMode: "auto",
+});
+
+const { state } = await pce.processChangeRequest({
+  requestText: "Add 2024 Ford Transit VIN 1FT... to the commercial auto policy.",
+  caseId: "pce-123",
+});
+
+if (state.missingInfoQuestions.length > 0) {
+  // Prompt the user for missing details before generating a carrier packet.
+  // See the Workflow guide for how to process their reply.
+}
+
+const packet = pce.generateSubmissionPacket({ state });
+```
+
+---
+
+## `PceCaseState` Properties
+
+After `processChangeRequest()` resolves, the returned `state` object carries everything needed to review, complete, and submit the case.
+
+<ResponseField name="items" type="PolicyChangeItem[]">
+  Normalized requested changes. Each item includes a `fieldPath`, `proposedValue`, `action` type (`add` | `modify` | `remove`), source citations, and a confidence score.
+</ResponseField>
+
+<ResponseField name="impacts" type="PolicyImpact[]">
+  Likely policy impacts for underwriter review — coverage changes, premium flags, and any carrier-specific concerns identified during validation.
+</ResponseField>
+
+<ResponseField name="evidenceSources" type="CaseEvidenceSource[]">
+  Source text used to ground the case. Each source carries a `sourceId`, raw text, and optional metadata. These are the records that citations in `items` point back to.
+</ResponseField>
+
+<ResponseField name="validationIssues" type="CaseValidationIssue[]">
+  Blocking, warning, or informational issues found during validation. Blocking issues must be resolved or intentionally overridden before a submission packet is considered ready.
+</ResponseField>
+
+<ResponseField name="missingInfoQuestions" type="PceMissingInfoQuestion[]">
+  Questions that must be answered before the case is complete. Each question is tied to an `itemId` and optional `fieldPath` so you can target the prompt precisely.
+</ResponseField>
+
+<ResponseField name="executionMode" type='"deterministic_tree" | "market_eval" | "hybrid"'>
+  The automation posture selected for this case, either by you or by the SDK's `auto` selection logic.
+</ResponseField>
+
+---
+
+## Agent Configuration
+
+<ParamField path="generateObject" type="GenerateObjectFn" required>
+  Structured object generation function for parsing change items and running validation schemas.
+</ParamField>
+
+<ParamField path="sourceRetriever" type="SourceRetriever" required>
+  Retriever used to pull policy and conversation evidence. Use `MemorySourceStore` for testing or provide a production implementation backed by your document store.
+</ParamField>
+
+<ParamField path="executionMode" type='"deterministic_tree" | "market_eval" | "hybrid" | "auto"' default='"auto"'>
+  Controls how the PCE state machine processes the case. Set `"auto"` to let the SDK choose based on the number of items, evidence confidence, and carrier constraints.
+</ParamField>
+
+<ParamField path="retrievalLimit" type="number" default="8">
+  Maximum number of source spans fetched during evidence collection.
+</ParamField>
+
+<ParamField path="onProgress" type="(message: string) => void">
+  Optional callback fired at each phase transition with a human-readable status message.
+</ParamField>
+
+---
+
+## Execution Modes
+
+| Mode | When to use |
+|---|---|
+| `deterministic_tree` | Constrained flows where rule-based checks are sufficient — e.g. adding a clearly described vehicle with all required fields present |
+| `market_eval` | Ambiguous or market-specific changes that need heavier review and model-assisted interpretation |
+| `hybrid` | Deterministic scaffolding with model-assisted interpretation for edge cases |
+| `auto` | SDK picks based on case complexity, evidence confidence, and missing-info count |
+
+<Note>
+  The SDK can determine that a case is ready for submission, but it does not submit changes to carriers. Treat all generated packets as draft or assisted work until a licensed user has reviewed the evidence, resolved missing-info questions, and cleared blocking validation issues.
+</Note>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Workflow Phases" href="/cl-sdk/pce/workflow" icon="diagram-project">
+    Explore each phase of the PCE state machine, execution modes, and standalone helper functions.
+  </Card>
+  <Card title="Submission Packets" href="/cl-sdk/pce/submission-packet" icon="paper-plane">
+    Learn how to generate carrier-ready packets, run quality reports, and review artifacts before submission.
+  </Card>
+</CardGroup>

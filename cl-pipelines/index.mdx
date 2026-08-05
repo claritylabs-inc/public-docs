@@ -1,0 +1,51 @@
+---
+title: "CL Pipelines: Durable Agent Execution Library"
+sidebarTitle: "Overview"
+description: "Typed phase model with explicit checkpoints, per-phase retry modes, and crash-safe execution for long-running jobs and LLM agent loops."
+---
+
+`@claritylabs/cl-pipelines` v0.1.0 gives you durable execution primitives for deterministic agents and regulated workflows. Instead of hoping your long-running job finishes in one shot, you break it into named **phases**, persist a **checkpoint** after each one, and let the library resume exactly where you left off after any crash, timeout, or deployment restart.
+
+## What it does
+
+Every pipeline run is a sequence of typed phases. After each phase completes, the library writes a serialized snapshot — a `Checkpoint<TState>` — to your storage layer before scheduling the next phase. If the process dies mid-flight, re-running the pipeline picks up from the last checkpoint automatically. You choose per-pipeline whether to resume from that checkpoint or discard it and start fresh.
+
+## How it differs from a job queue
+
+A job queue handles *scheduling* — it decides when to hand a job to a worker. `cl-pipelines` is the execution model *inside* that job. It answers a different question: once your worker is running, how does multi-step work stay consistent across crashes? You can wire the library's `SchedulerAdapter` directly to your existing queue; they compose rather than compete.
+
+## How it differs from agent frameworks
+
+Most agent frameworks prescribe a graph structure (nodes, edges, routers) and bundle their own LLM client. `cl-pipelines` is runtime-agnostic, doesn't prescribe graph shape, and drives LLM calls through the [Vercel AI SDK](https://sdk.vercel.ai)'s provider-agnostic `LanguageModel` interface. If you already have a prompt/tool setup in AI SDK v6, the `runAgent` helper slots straight in.
+
+## When to use it
+
+- Multi-step document processing (extract → validate → enrich → publish)
+- Approval chains where each step may wait for human input
+- LLM agent loops that must survive crashes and resume mid-conversation
+- Any workflow where end users need visible, real-time progress
+
+## Key concepts
+
+| Concept | What it is |
+|---|---|
+| **Phase** | Smallest unit of work — a `name` + `run` function |
+| **Checkpoint\<TState\>** | Serialized snapshot: `nextPhase`, `state`, `createdAt` |
+| **RetryMode** | `"resume"` (from checkpoint) or `"full"` (fresh start) |
+| **StorageAdapter** | Interface your storage layer implements to persist job state |
+| **SchedulerAdapter** | Interface your queue/scheduler implements to trigger phase advances |
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/cl-pipelines/quickstart">
+    Build and run your first durable pipeline in minutes.
+  </Card>
+  <Card title="Core Concepts" icon="book-open" href="/cl-pipelines/concepts">
+    Deep-dive into phases, checkpoints, retry modes, and adapters.
+  </Card>
+  <Card title="Convex Adapter" icon="database" href="/cl-pipelines/adapters/convex">
+    Wire cl-pipelines to Convex storage and scheduling.
+  </Card>
+  <Card title="Agent Loop" icon="robot" href="/cl-pipelines/agent/overview">
+    Run a crash-safe multi-turn LLM agent with tool calls.
+  </Card>
+</CardGroup>

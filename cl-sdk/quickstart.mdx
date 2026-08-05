@@ -1,0 +1,236 @@
+---
+title: "CL SDK Quickstart: Extract, Query, and Process in Minutes"
+sidebarTitle: "Quickstart"
+description: "Install @claritylabs/cl-sdk, wire up your first provider callbacks, and run document extraction, queries, and PCE workflows end-to-end."
+---
+
+This guide walks you through every major CL SDK workflow from installation to a working Policy Change Endorsement packet. Each section builds on the previous one, so you can stop once you have what you need or follow through to the end for a complete picture.
+
+## Steps
+
+<Steps>
+
+### Install the SDK
+
+Install the SDK and its peer dependencies with your package manager:
+
+```bash
+npm install @claritylabs/cl-sdk pdf-lib zod
+```
+
+`pdf-lib` is required for PDF manipulation in the application pipeline. `zod` provides the schema validation that `generateObject` callbacks receive.
+
+### Create provider callbacks
+
+CL SDK communicates with language models through plain async functions. Extraction needs only `generateObject`; query, application, PCE, and agent prompt workflows also need `generateText`. The example below uses the Anthropic SDK—swap the client for any provider you prefer.
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+const client = new Anthropic();
+
+const generateText = async ({
+  prompt,
+  system,
+  maxTokens,
+  taskKind,
+  budgetDiagnostics,
+  providerOptions,
+}) => {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: maxTokens,
+    system: system ? [{ type: "text", text: system }] : undefined,
+    messages: [{ role: "user", content: prompt }],
+  });
+  return {
+    text: response.content[0].type === "text" ? response.content[0].text : "",
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    },
+  };
+};
+
+const generateObject = async ({
+  prompt,
+  system,
+  schema,
+  maxTokens,
+  taskKind,
+  budgetDiagnostics,
+  providerOptions,
+}) => {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: maxTokens,
+    system: system ? [{ type: "text", text: system }] : undefined,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...(providerOptions?.pdfBase64
+            ? [
+                {
+                  type: "document",
+                  source: {
+                    type: "base64",
+                    media_type: "application/pdf",
+                    data: providerOptions.pdfBase64,
+                  },
+                },
+              ]
+            : []),
+          { type: "text", text: prompt },
+        ],
+      },
+    ],
+  });
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "{}";
+  return {
+    object: schema.parse(JSON.parse(text)),
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    },
+  };
+};
+```
+
+<Note>
+  The `taskKind` parameter lets you route different extraction and reasoning tasks to different models. You can safely ignore it during development and add model routing later without changing any other code.
+</Note>
+
+### Extract a document
+
+Use `buildPageSourceSpans` to turn your parsed PDF page text into source evidence, then pass it to the extractor. The extractor returns a fully structured `InsuranceDocument`, a canonical source tree, an operational profile, and per-call token usage.
+
+```typescript
+import { buildPageSourceSpans, createExtractor } from "@claritylabs/cl-sdk";
+import { readFileSync } from "fs";
+
+const pdfBase64 = readFileSync("./policy.pdf").toString("base64");
+const extractor = createExtractor({ generateObject });
+
+const sourceSpans = buildPageSourceSpans([
+  {
+    documentId: "doc-123",
+    sourceKind: "policy_pdf",
+    pageNumber: 1,
+    text: pageOneText,
+  },
+]);
+
+const { document, sourceTree, operationalProfile, sourceChunks, tokenUsage } =
+  await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
+
+console.log(document.carrier);       // "Hartford"
+console.log(document.policyNumber);  // "GL-2024-001234"
+console.log(sourceTree.length);      // canonical source hierarchy node count
+console.log(operationalProfile);     // source-backed product facts
+```
+
+### Extract from Docling input
+
+If your parsing pipeline uses [Docling](https://github.com/DS4SD/docling), pass its JSON output directly—no need to build source spans manually:
+
+```typescript
+const { document, sourceSpans } = await extractor.extract(
+  {
+    kind: "docling_document",
+    document: doclingDocumentJson,
+    sourceKind: "policy_pdf",
+  },
+  "doc-123"
+);
+```
+
+### Query documents
+
+`createQueryAgent` runs a five-phase pipeline (classify → plan → retrieve → reason → respond) and returns answers with citations back to specific source chunks and page numbers.
+
+```typescript
+import { createQueryAgent } from "@claritylabs/cl-sdk";
+
+const agent = createQueryAgent({
+  generateText,
+  generateObject,
+  documentStore,
+  memoryStore,
+  sourceRetriever,
+});
+
+const result = await agent.query({
+  question: "What is the GL deductible?",
+  conversationId: "conv-1",
+});
+
+console.log(result.answer);
+// "The General Liability deductible is $1,000 per occurrence."
+
+console.log(result.citations);
+// [{ chunkId: "...", text: "...", pages: [3] }]
+```
+
+### Process an application
+
+The application pipeline classifies the form, extracts and auto-fills known fields, then batches remaining questions by topic for user collection.
+
+```typescript
+import { createApplicationPipeline } from "@claritylabs/cl-sdk";
+
+const pipeline = createApplicationPipeline({ generateObject });
+const { state } = await pipeline.processApplication({
+  pdfBase64,
+  applicationId: "app-1",
+  sourceSpans,
+});
+
+console.log(state.fields);   // extracted and auto-filled fields
+console.log(state.batches);  // topic-based question batches for user collection
+```
+
+### Build a PCE packet
+
+The PCE agent handles intake, evidence collection, missing-info prompting, and submission packet generation for Policy Change Endorsement requests.
+
+```typescript
+import { createPceAgent } from "@claritylabs/cl-sdk";
+
+const pce = createPceAgent({
+  generateObject,
+  sourceRetriever,
+  executionMode: "auto",
+});
+
+const { state } = await pce.processChangeRequest({
+  requestText: "Add the new van to the commercial auto policy effective June 1.",
+});
+
+const packet = pce.generateSubmissionPacket({ state });
+```
+
+### Add progress logging
+
+Pass an `onProgress` callback to any factory function to receive human-readable status messages throughout each pipeline phase:
+
+```typescript
+const extractor = createExtractor({
+  generateText,
+  generateObject,
+  onProgress: (message) => console.log(`[cl-sdk] ${message}`),
+});
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/cl-sdk/architecture">
+    Understand how the eight SDK systems interact and where agentic decision points live.
+  </Card>
+  <Card title="Models & Callbacks" icon="code" href="/cl-sdk/models">
+    Full reference for `GenerateText`, `GenerateObject`, `EmbedText`, and multi-provider examples.
+  </Card>
+</CardGroup>

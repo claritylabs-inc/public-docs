@@ -1,0 +1,209 @@
+---
+title: "Source Retrieval: Searching Evidence Spans"
+sidebarTitle: "Retrieval"
+description: "Search source spans and document nodes using SourceRetriever with configurable retrieval modes, filters, and deterministic result ordering."
+---
+
+Source retrieval is the mechanism that connects LLM agents to your evidence layer. Rather than passing full documents into every prompt, you retrieve only the spans and nodes most relevant to the current question — keeping context windows focused, citations accurate, and costs predictable. `SourceRetriever` is the interface every agent and pipeline in CL SDK uses to fetch evidence at query time.
+
+## SourceRetriever Interface
+
+<CodeGroup>
+```typescript SourceRetriever
+interface SourceRetriever {
+  searchSourceSpans(query: SourceRetrievalQuery): Promise<SourceRetrievalResult[]>;
+  searchSourceNodes?(query: SourceRetrievalQuery): Promise<SourceNodeRetrievalResult[]>;
+}
+```
+
+```typescript SourceRetrievalQuery
+interface SourceRetrievalQuery {
+  question: string;
+  documentIds?: string[];
+  limit?: number;
+  mode?: "graph_only" | "source_rag" | "long_context" | "hybrid";
+  filters?: Record<string, string>;
+}
+```
+
+```typescript SourceNodeRetrievalResult
+interface SourceNodeRetrievalResult {
+  node: DocumentSourceNode;
+  relevance: number;
+  hierarchy: DocumentSourceNode[]; // ancestors + siblings + children
+  spans: SourceSpan[];
+}
+```
+</CodeGroup>
+
+`searchSourceNodes` is optional — implement it when your store has a structured node graph. Agents fall back to `searchSourceSpans` when `searchSourceNodes` is not available.
+
+## Retrieval Modes
+
+<Tabs>
+  <Tab title="graph_only">
+    Uses structured relationships and exact metadata matches. No vector search. Best for queries where you know the exact section, form number, or metadata filter that contains the answer.
+
+    ```typescript
+    const evidence = await store.searchSourceSpans({
+      question: "What is the retroactive date for the E&O coverage?",
+      documentIds: ["policy-123"],
+      mode: "graph_only",
+      filters: { sectionId: "professional_liability", formNumber: "PL 00 01" },
+    });
+    ```
+  </Tab>
+  <Tab title="source_rag">
+    Performs source-node retrieval first to identify relevant document regions, then fetches exact source spans within those regions. The default mode for most coverage queries.
+
+    ```typescript
+    const evidence = await store.searchSourceSpans({
+      question: "What is the general liability per occurrence limit?",
+      documentIds: ["policy-123"],
+      mode: "source_rag",
+      limit: 5,
+    });
+    ```
+  </Tab>
+  <Tab title="long_context">
+    Returns larger source windows suitable for providers that support extended context. Use this mode when the question requires synthesizing information across multiple sections of a document.
+
+    ```typescript
+    const evidence = await store.searchSourceSpans({
+      question: "Summarize all exclusions that apply to cyber liability.",
+      documentIds: ["policy-123"],
+      mode: "long_context",
+      limit: 10,
+    });
+    ```
+  </Tab>
+  <Tab title="hybrid">
+    Combines structured metadata filters with lexical and vector retrieval. Best for production pipelines where you need high recall on ambiguous queries but still want precise filtering by document section or form number.
+
+    ```typescript
+    const evidence = await store.searchSourceSpans({
+      question: "Is there a cyber liability sublimit?",
+      documentIds: ["policy-123"],
+      mode: "hybrid",
+      filters: { sectionId: "declarations" },
+      limit: 8,
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Memory Store Usage
+
+`MemorySourceStore` is an in-process store backed by a flat array. It uses lexical search (substring and keyword matching) rather than vector embeddings. Use it for development, testing, and single-request extraction workflows.
+
+```typescript
+import { MemorySourceStore } from "@claritylabs/cl-sdk";
+
+const store = new MemorySourceStore();
+
+// Populate the store
+await store.addSourceSpans(spans);
+await store.addSourceChunks(chunks);
+
+// Search spans
+const evidence = await store.searchSourceSpans({
+  question: "What is the general liability per occurrence limit?",
+  documentIds: ["policy-123"],
+  filters: { sectionId: "declarations" },
+  limit: 5,
+});
+
+// Retrieve a specific span by ID
+const span = await store.getSourceSpan("policy-123::page::1::abc123");
+
+// Get all spans for a document
+const allSpans = await store.getSourceSpansByDocument("policy-123");
+```
+
+<Note>
+  `MemorySourceStore` is not persistent. All spans and chunks are lost when the process exits. For production use, implement `SourceStore` against your own database — see the [Storage Overview](/cl-sdk/storage/overview) for guidance.
+</Note>
+
+## Deterministic Ordering
+
+When you combine results from multiple retrieval passes (vector search + structured filters, or multiple document IDs), use `orderSourceEvidence` to produce a stable, deterministic ranking before passing evidence to an LLM.
+
+```typescript
+import { orderSourceEvidence } from "@claritylabs/cl-sdk";
+
+const vectorResults = await store.searchSourceSpans({ question, mode: "source_rag", limit: 5 });
+const structuredResults = await store.searchSourceSpans({ question, mode: "graph_only", filters });
+
+const ordered = orderSourceEvidence([...vectorResults, ...structuredResults]);
+// Orders by descending relevance score, then stable source identifier (documentId + pageStart + spanId)
+```
+
+Deterministic ordering ensures that identical queries always produce the same evidence sequence, making LLM outputs reproducible and diff-friendly in testing.
+
+## Implementing a Custom SourceRetriever
+
+You can plug any data source into CL SDK agents by implementing `SourceRetriever`. The minimum viable implementation requires only `searchSourceSpans`.
+
+```typescript
+import type { SourceRetriever, SourceRetrievalQuery, SourceRetrievalResult } from "@claritylabs/cl-sdk";
+
+class MyVectorRetriever implements SourceRetriever {
+  constructor(private db: MyVectorDatabase) {}
+
+  async searchSourceSpans(query: SourceRetrievalQuery): Promise<SourceRetrievalResult[]> {
+    const embedding = await myEmbedProvider.embed(query.question);
+
+    const rows = await this.db.query({
+      vector: embedding,
+      filter: {
+        documentIds: query.documentIds,
+        ...query.filters,
+      },
+      limit: query.limit ?? 5,
+    });
+
+    return rows.map((row) => ({
+      span: row.span,
+      relevance: row.score,
+    }));
+  }
+}
+```
+
+Pass your implementation to any agent or pipeline via the `sourceRetriever` config option:
+
+```typescript
+import { createQueryAgent } from "@claritylabs/cl-sdk";
+
+const agent = createQueryAgent({
+  generateText,
+  generateObject,
+  documentStore,
+  memoryStore,
+  sourceRetriever: new MyVectorRetriever(myDb),
+});
+```
+
+<Tip>
+  If your store supports `searchSourceNodes`, implement that method too. Agents that support node-level retrieval will use it to build richer hierarchical context before falling back to span-level search.
+</Tip>
+
+## Filters Reference
+
+<ResponseField name="sectionId" type="string">
+  Match spans whose `sectionId` equals this value. Useful for scoping queries to declarations, definitions, or named endorsements.
+</ResponseField>
+
+<ResponseField name="formNumber" type="string">
+  Match spans from a specific ISO or carrier form (e.g. `"CG 00 01"`, `"IM 7053"`).
+</ResponseField>
+
+<ResponseField name="sourceKind" type="string">
+  Filter by source kind: `"policy_pdf"`, `"application_pdf"`, `"email"`, `"attachment"`, or `"manual_note"`.
+</ResponseField>
+
+<ResponseField name="sourceUnit" type="string">
+  Filter by span unit type: `"page"`, `"section"`, `"table"`, `"table_row"`, `"table_cell"`, or `"text"`.
+</ResponseField>
+
+Any key in a span's `metadata` record is also available as a filter key. Filter matching is exact string equality.

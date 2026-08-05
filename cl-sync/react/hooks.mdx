@@ -1,0 +1,173 @@
+---
+title: "React Hooks for Local-First Sync"
+sidebarTitle: "Hooks"
+description: "Use CL Sync's React hooks to reactively read collections, records, and sync status, and to dispatch durable optimistic mutations from any component."
+---
+
+CL Sync provides a set of React hooks that subscribe to store changes and keep your components in sync with local-first data. All hooks must be used inside a `SyncProvider`. They re-render automatically whenever the relevant slice of store state changes.
+
+## `useSyncStatus()`
+
+Returns the live `SyncStatus` object. Use it to show loading states, connection indicators, and pending mutation counts. The component re-renders whenever any status field changes.
+
+```tsx
+import { useSyncStatus } from "@claritylabs/cl-sync/react";
+
+function SyncIndicator() {
+  const status = useSyncStatus();
+
+  if (!status.hydrated) return <LoadingSpinner />;
+
+  return (
+    <div>
+      {status.online ? "Online" : "Offline"}
+      {status.pendingMutations > 0 && (
+        <span>{status.pendingMutations} changes pending…</span>
+      )}
+      {status.lastError && (
+        <span className="error">Sync error: {status.lastError}</span>
+      )}
+    </div>
+  );
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `hydrated` | `boolean` | `true` once `hydrate()` resolves |
+| `hydrating` | `boolean` | `true` while `hydrate()` is in progress |
+| `online` | `boolean` | Mirrors `navigator.onLine` |
+| `pendingMutations` | `number` | Count of pending + flushing outbox items |
+| `lastSyncAt` | `number \| undefined` | Timestamp of last successful collection upsert |
+| `lastError` | `string \| undefined` | Most recent flush error message |
+
+## `useSyncCollection(definition, args?)`
+
+Subscribes to a collection slice and returns the sorted record array. Returns `undefined` while the store has never loaded this slice (distinct from `[]`, which means the server confirmed it's empty). Pass query arguments when your collection uses `deriveKey`.
+
+```tsx
+import { useSyncCollection } from "@claritylabs/cl-sync/react";
+
+function TodoList({ listId }: { listId: string }) {
+  const todos = useSyncCollection(todoCollection, { listId }) ?? [];
+
+  return (
+    <ul>
+      {todos.map((todo) => (
+        <li key={todo.id}>{todo.title}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+<Tip>
+  Use `?? []` to fall back to an empty array before hydration completes. Use `?? undefined` and render a skeleton when you want to distinguish "not loaded yet" from "loaded but empty".
+</Tip>
+
+## `useSyncRecord(collection, id?)`
+
+Subscribes to a single record by collection name and string ID. Returns `undefined` if the record isn't in the cache or if `id` is `undefined` (handy for optional IDs from route params).
+
+```tsx
+import { useSyncRecord } from "@claritylabs/cl-sync/react";
+
+function PolicyDetail({ policyId }: { policyId: string }) {
+  const policy = useSyncRecord<Policy>("policies", policyId);
+
+  if (!policy) return <NotFound />;
+
+  return <div>{policy.insuredName}</div>;
+}
+```
+
+## `useSyncMutation(definition)`
+
+Returns a stable callback that calls `store.enqueueMutation` when invoked. The callback applies the optimistic `reducer` immediately and returns a promise that resolves with the `flush` result (or `undefined` if no `flush` is defined).
+
+```tsx
+import { useSyncMutation } from "@claritylabs/cl-sync/react";
+
+function AddTodoButton({ listId }: { listId: string }) {
+  const create = useSyncMutation(createTodo);
+
+  return (
+    <button
+      onClick={() =>
+        create({
+          id: crypto.randomUUID(),
+          listId,
+          title: "New item",
+        })
+      }
+    >
+      Add todo
+    </button>
+  );
+}
+```
+
+The returned callback signature is:
+
+```typescript
+(args: TArgs, clientMutationId?: string) => Promise<TResult | undefined>
+```
+
+## `useHydratedValue(localValue, serverValue)`
+
+A utility hook for server-rendering patterns. Returns:
+
+- `serverValue` if it is non-nullish (server data is authoritative)
+- `localValue` if the store is hydrated (IndexedDB data is ready)
+- `undefined` if neither is available yet
+
+```tsx
+import { useHydratedValue } from "@claritylabs/cl-sync/react";
+
+function TodoList({ serverTodos }: { serverTodos?: Todo[] }) {
+  const localTodos = useSyncCollection(todoCollection, {});
+  const todos = useHydratedValue(localTodos, serverTodos) ?? [];
+
+  return <ul>{todos.map((t) => <li key={t.id}>{t.title}</li>)}</ul>;
+}
+```
+
+This pattern lets you pass server-rendered data as a prop for the initial paint, then seamlessly hand off to the local cache once it's ready.
+
+## `useSyncStore()`
+
+Returns the raw `SyncStore` instance from context. Use this for advanced patterns that need direct store access outside the higher-level hooks.
+
+```tsx
+import { useSyncStore } from "@claritylabs/cl-sync/react";
+
+function DebugPanel() {
+  const store = useSyncStore();
+
+  return (
+    <pre>{JSON.stringify(store.getOutbox(), null, 2)}</pre>
+  );
+}
+```
+
+## `useSyncSelector(selector)`
+
+Subscribes to store changes and returns the result of `selector(store)`. The component re-renders only when the selector's return value changes (by reference equality). Use this for custom derived state that doesn't map directly to a single collection or record.
+
+```tsx
+import { useSyncSelector } from "@claritylabs/cl-sync/react";
+
+function FailedMutationBadge() {
+  const failedCount = useSyncSelector(
+    (store) => store.getOutbox().filter((i) => i.status === "failed").length
+  );
+
+  if (failedCount === 0) return null;
+
+  return <span className="badge">{failedCount} failed</span>;
+}
+```
+
+<Note>
+  `useSyncSelector` re-runs the selector on every store emission. Keep selectors cheap — avoid allocating new arrays or objects inside the selector unless you memoize with `useMemo`.
+</Note>

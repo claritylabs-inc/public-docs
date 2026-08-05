@@ -1,0 +1,247 @@
+---
+title: "Citation-Backed Query Agent Pipeline"
+sidebarTitle: "Pipeline"
+description: "Understand the 7-phase query agent pipeline that answers insurance questions against stored documents with grounded, citation-backed responses."
+---
+
+The query agent transforms natural-language questions into grounded, citation-backed answers by running your question through a structured multi-phase pipeline. Each phase builds on the previous one — from interpreting any attached files, through parallel retrieval and reasoning, to a final verified response with inline source references. You get a confidence score, follow-up suggestions, and a full token usage report alongside every answer.
+
+## Quick Start
+
+Install the SDK and wire up your stores, then create an agent instance and call `agent.query()`.
+
+```typescript
+import { createQueryAgent } from "@claritylabs/cl-sdk";
+
+const agent = createQueryAgent({
+  generateText,
+  generateObject,
+  documentStore,
+  memoryStore,
+  sourceRetriever,
+});
+
+const result = await agent.query({
+  question: "What is the deductible on our GL policy?",
+  conversationId: "conv-123",
+});
+
+console.log(result.answer);
+// "The general liability policy has a $1,000 per-occurrence deductible [1]."
+
+console.log(result.citations);
+// [{ index: 1, chunkId: "doc-456:coverage:0", quote: "...", ... }]
+
+console.log(result.confidence); // 0.92
+```
+
+### Querying with Attachments
+
+Pass one or more `attachments` alongside your question. The pipeline interprets each file during Phase 1 before retrieval begins, so evidence from the attachments is available to every downstream reasoner.
+
+```typescript
+const result = await agent.query({
+  question:
+    "What details should we collect from this photo, and is there policy context?",
+  conversationId: "conv-123",
+  attachments: [
+    {
+      kind: "image",
+      name: "damage.jpg",
+      mimeType: "image/jpeg",
+      base64: damagePhotoBase64,
+    },
+    {
+      kind: "pdf",
+      name: "coi.pdf",
+      mimeType: "application/pdf",
+      base64: coiPdfBase64,
+    },
+  ],
+});
+```
+
+---
+
+## Pipeline Phases
+
+The query agent runs seven sequential phases for every question. Retrieval and reasoning phases run in parallel across sub-questions to keep latency low.
+
+<Steps>
+  <Step title="Interpret Attachments">
+    If attachments are present, the agent processes each one with a vision-capable or PDF-aware model. Each interpreted file becomes an `EvidenceItem` that flows into the retrieval and reasoning phases alongside document store results.
+  </Step>
+
+  <Step title="Classify">
+    The question is classified into a `QueryIntent`, broken into sub-questions, and evaluated for storage requirements. Classification drives which retrieval strategies run in Phase 4.
+
+    **Supported intents:** `policy_question` · `coverage_comparison` · `document_search` · `claims_inquiry` · `general_knowledge`
+  </Step>
+
+  <Step title="Plan Retrieval">
+    The planner checks whether a lookup is actually needed — for example, if the conversation history already contains a complete answer, retrieval can be skipped entirely. This keeps token usage low for follow-up questions.
+  </Step>
+
+  <Step title="Retrieve (Parallel)">
+    When retrieval is needed, four strategies run in parallel up to the configured `concurrency` limit:
+
+    - **Chunk search** — semantic similarity search across indexed document chunks
+    - **Document lookup** — structured look up by carrier, policy number, or document type
+    - **Source retrieval** — fetches raw source spans via the optional `SourceRetriever`
+    - **Conversation history** — recent turns for continuity and reference
+
+    Results are merged and deduplicated into a ranked evidence list.
+  </Step>
+
+  <Step title="Reason (Parallel)">
+    Each sub-question gets its own reasoner, and they all run in parallel. Critically, **each reasoner only sees its assigned evidence items — never full documents.** This constraint enforces grounding and makes citation tracking possible: every factual claim maps back to a specific chunk.
+  </Step>
+
+  <Step title="Verify">
+    The verifier checks three properties across all sub-answers:
+
+    - **Grounding** — every claim has a citation that actually supports it
+    - **Consistency** — sub-answers don't contradict each other
+    - **Completeness** — the original question is fully addressed
+
+    If any check fails, the verifier can trigger a targeted retry on specific sub-questions before the pipeline advances.
+  </Step>
+
+  <Step title="Respond">
+    Sub-answers are merged into a single coherent response. Citations are deduplicated and assigned sequential display numbers (`[1]`, `[2]`, etc.). The final `QueryOutput` is returned with the answer, citations, confidence score, and review report.
+  </Step>
+</Steps>
+
+<Note>
+  Reasoners only see evidence items, never full documents. This design forces grounding and enables precise citation tracking — every `[n]` reference in the answer maps to a specific chunk ID and quoted passage.
+</Note>
+
+---
+
+## Configuration
+
+Pass options to `createQueryAgent()` to tune retrieval depth, parallelism, and observability hooks.
+
+```typescript
+const agent = createQueryAgent({
+  generateText,
+  generateObject,
+  documentStore,
+  memoryStore,
+  sourceRetriever,      // optional SourceRetriever
+  concurrency: 3,       // max parallel retrievers / reasoners
+  maxVerifyRounds: 1,   // verification loop iterations
+  retrievalLimit: 10,   // max evidence items per sub-question
+  retrievalMode: "hybrid",
+  onTokenUsage: (usage) => void,
+  onProgress: (message) => void,
+});
+```
+
+<ParamField path="generateText" type="GenerateTextFn" required>
+  Text generation function from your AI provider (e.g. Vercel AI SDK's `generateText`).
+</ParamField>
+
+<ParamField path="generateObject" type="GenerateObjectFn" required>
+  Structured object generation function for classification and reasoning schemas.
+</ParamField>
+
+<ParamField path="documentStore" type="DocumentStore" required>
+  Store used for chunk search and document lookup during retrieval.
+</ParamField>
+
+<ParamField path="memoryStore" type="MemoryStore" required>
+  Conversation memory store used to retrieve and persist turn history.
+</ParamField>
+
+<ParamField path="sourceRetriever" type="SourceRetriever">
+  Optional retriever for raw source spans. When omitted, source retrieval is skipped.
+</ParamField>
+
+<ParamField path="concurrency" type="number" default="3">
+  Maximum number of retrievers or reasoners to run in parallel.
+</ParamField>
+
+<ParamField path="maxVerifyRounds" type="number" default="1">
+  How many times the verifier may trigger a targeted retry before accepting the current answers.
+</ParamField>
+
+<ParamField path="retrievalLimit" type="number" default="10">
+  Maximum number of evidence items fetched per sub-question during retrieval.
+</ParamField>
+
+<ParamField path="retrievalMode" type='"hybrid" | "semantic" | "keyword"' default='"hybrid"'>
+  Strategy used when searching document chunks. `hybrid` combines semantic and keyword matching.
+</ParamField>
+
+<ParamField path="onTokenUsage" type="(usage: TokenUsage) => void">
+  Callback fired after each phase with a cumulative token usage snapshot.
+</ParamField>
+
+<ParamField path="onProgress" type="(message: string) => void">
+  Callback fired with a human-readable progress message at each phase transition.
+</ParamField>
+
+---
+
+## Output Shape
+
+Every call to `agent.query()` resolves to a `QueryOutput` object.
+
+```typescript
+interface QueryOutput {
+  answer: string;
+  citations: Citation[];
+  intent: QueryIntent;
+  confidence: number;
+  followUp?: string;
+  tokenUsage: TokenUsage;
+  reviewReport: QueryReviewReport;
+}
+```
+
+<ResponseField name="answer" type="string">
+  The final merged answer with inline citation markers like `[1]`, `[2]`.
+</ResponseField>
+
+<ResponseField name="citations" type="Citation[]">
+  Ordered list of citations referenced in the answer. See the [Citations guide](/cl-sdk/query/citations) for the full `Citation` shape.
+</ResponseField>
+
+<ResponseField name="intent" type="QueryIntent">
+  Classified intent: `policy_question` · `coverage_comparison` · `document_search` · `claims_inquiry` · `general_knowledge`.
+</ResponseField>
+
+<ResponseField name="confidence" type="number">
+  Aggregate confidence score from `0` to `1` reflecting grounding quality and evidence coverage.
+</ResponseField>
+
+<ResponseField name="followUp" type="string">
+  Optional suggested follow-up question surfaced by the reasoner when the answer is partial or ambiguous.
+</ResponseField>
+
+<ResponseField name="tokenUsage" type="TokenUsage">
+  Total prompt and completion tokens consumed across all phases.
+</ResponseField>
+
+<ResponseField name="reviewReport" type="QueryReviewReport">
+  Detailed grounding, consistency, and completeness report from the verifier phase.
+</ResponseField>
+
+---
+
+## Query Intents
+
+The classifier assigns one of five intents to every question. The intent controls which retrieval strategies are prioritised in Phase 4.
+
+| Intent | Description | Retrieval focus |
+|---|---|---|
+| `policy_question` | Specific coverage, limits, or deductibles | Coverage and declaration chunks |
+| `coverage_comparison` | Comparing coverages across documents | Coverage chunks from multiple documents |
+| `document_search` | Finding a document by carrier, number, or name | Structured document lookup |
+| `claims_inquiry` | Claims history or loss experience questions | Loss history chunks |
+| `general_knowledge` | Insurance concepts not tied to a document | Broader chunk search |
+
+<Tip>
+  For `coverage_comparison` queries, set `retrievalLimit` higher (e.g. `20`) so the agent can gather sufficient evidence from each document before reasoning begins.
+</Tip>

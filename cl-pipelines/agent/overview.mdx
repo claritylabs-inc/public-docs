@@ -1,0 +1,163 @@
+---
+title: "Durable LLM Agent Loop with Checkpointing"
+sidebarTitle: "Overview"
+description: "Use runAgent to run a crash-safe multi-turn LLM agent loop where each conversation turn is a durable pipeline phase with automatic checkpointing."
+---
+
+`runAgent` is a convenience wrapper around `runPipeline` that drives a multi-turn LLM conversation. Each turn in the conversation is a single pipeline phase named `"turn"`. If the process crashes mid-conversation, the message history is preserved in the checkpoint and the agent resumes from the last completed turn — no messages are lost and no API calls are duplicated.
+
+## When to use runAgent
+
+<CardGroup cols={2}>
+  <Card title="Use runAgent when…" icon="check">
+    - You need a multi-turn tool loop that must survive crashes or timeouts
+    - You want per-turn log entries and crash-safe resume with message history intact
+    - You're building on Convex or another durable backend and want the simplest path
+  </Card>
+  <Card title="Use something else when…" icon="x">
+    - One-shot prompt with no tools → call `generateText` directly from the AI SDK
+    - Custom phase graph with LLM calls → use `buildAgentPhase` and compose phases manually
+    - You need parallel tool execution or branching → build phases explicitly
+  </Card>
+</CardGroup>
+
+## Installation
+
+You need the core package, the Vercel AI SDK, and `zod` for tool schemas:
+
+```bash
+npm install @claritylabs/cl-pipelines ai zod
+```
+
+## Quickstart
+
+The following example wires up a calculator tool and runs a single-question agent conversation end-to-end:
+
+```typescript
+import { gateway, tool } from "ai";
+import { z } from "zod";
+import {
+  runAgent,
+  advancePhase,
+  buildAgentPhase,
+  createMemoryStorage,
+  createMemoryScheduler,
+} from "@claritylabs/cl-pipelines";
+import type { AgentCheckpoint } from "@claritylabs/cl-pipelines";
+
+const model = gateway("anthropic/claude-opus-4.7");
+
+const calculator = tool({
+  description: "Evaluate a simple arithmetic expression",
+  inputSchema: z.object({ expression: z.string() }),
+  execute: async ({ expression }) => {
+    return { result: Function(`"use strict"; return (${expression})`)() };
+  },
+});
+
+const storage = createMemoryStorage<AgentCheckpoint>();
+const scheduler = createMemoryScheduler();
+const phases = [buildAgentPhase({ model, tools: { calculator } })];
+
+scheduler._bind(async (jobId) => {
+  await advancePhase({ jobId, phases, storage, scheduler });
+});
+
+await runAgent({
+  jobId: "job-001",
+  model,
+  tools: { calculator },
+  system: "You are a helpful assistant.",
+  initialMessages: [{ role: "user", content: "What is (2 + 3) * 7?" }],
+  storage,
+  scheduler,
+});
+
+await scheduler.drain();
+```
+
+## Turn lifecycle
+
+Each call to `advancePhase` processes one turn. Within a turn, the library:
+
+1. Calls `generateText({ model, messages, tools })` with the full message history from the checkpoint
+2. Appends `result.response.messages` (model response + any tool results) to the history
+3. Checks `finishReason`:
+   - `"tool-calls"` → returns `{ kind: "next", nextPhase: "turn" }` — the same phase runs again with the updated history
+   - `"stop"` → returns `{ kind: "done" }` — pipeline completes
+   - `turn >= maxTurns` → logs a warning and returns `{ kind: "done" }` (status: `"complete"`, not `"error"`)
+
+## RunAgentArgs
+
+```typescript
+type RunAgentArgs<TOOLS> = {
+  jobId: string;
+  model: LanguageModel;          // any AI SDK LanguageModel
+  tools?: TOOLS;
+  system?: string;
+  initialMessages: AgentTurn[];  // AgentTurn = ModelMessage from AI SDK
+  maxTurns?: number;             // default: 10
+  storage: StorageAdapter<AgentCheckpoint>;
+  scheduler: SchedulerAdapter;
+  retryMode?: RetryMode;
+};
+```
+
+<ParamField path="jobId" type="string" required>
+  Unique identifier for this agent run.
+</ParamField>
+
+<ParamField path="model" type="LanguageModel" required>
+  Any AI SDK v6 `LanguageModel`. Use `gateway()`, `openai()`, `anthropic()`, or any compatible provider.
+</ParamField>
+
+<ParamField path="tools" type="TOOLS">
+  A record of AI SDK `tool()` objects. The keys become the tool names the model calls. See [Tools](/cl-pipelines/agent/tools).
+</ParamField>
+
+<ParamField path="system" type="string">
+  System prompt prepended to every turn's message array.
+</ParamField>
+
+<ParamField path="initialMessages" type="AgentTurn[]" required>
+  The starting message history, typically `[{ role: "user", content: "..." }]`. On `"resume"`, this is ignored — the checkpoint's message history is used instead.
+</ParamField>
+
+<ParamField path="maxTurns" type="number">
+  Maximum number of turns before the agent stops. Defaults to `10`. When the limit is reached, the pipeline completes normally (not as an error).
+</ParamField>
+
+<ParamField path="storage" type="StorageAdapter<AgentCheckpoint>" required>
+  Storage adapter typed to `AgentCheckpoint`.
+</ParamField>
+
+<ParamField path="scheduler" type="SchedulerAdapter" required>
+  Scheduler adapter that triggers each turn advance.
+</ParamField>
+
+<ParamField path="retryMode" type="RetryMode">
+  `"resume"` keeps message history intact; `"full"` discards it and starts fresh from `initialMessages`.
+</ParamField>
+
+## AgentCheckpoint
+
+The state type used by the agent loop:
+
+```typescript
+type AgentCheckpoint = {
+  messages: AgentTurn[];         // full conversation history accumulated across turns
+  pendingToolCalls: Array<...>;  // reserved for v0.2 — always empty in v0.1
+  turn: number;                  // current turn index (0-based)
+};
+```
+
+<Note>
+  `pendingToolCalls` is reserved for a future version that will support interrupting the agent to execute long-running tools as separate pipeline phases. In v0.1, all tool execution is synchronous within a single turn.
+</Note>
+
+## Retry behavior
+
+| retryMode | Behavior |
+|-----------|----------|
+| `"resume"` | Message history from the checkpoint is used. The agent continues from where it was. |
+| `"full"` | Checkpoint discarded. Agent restarts from `initialMessages` with `turn: 0`. |

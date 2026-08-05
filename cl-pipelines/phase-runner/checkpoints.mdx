@@ -1,0 +1,117 @@
+---
+title: "Checkpoint Protocol for Crash-Safe Pipelines"
+sidebarTitle: "Checkpoints"
+description: "Learn exactly when cl-pipelines writes, updates, and clears checkpoints, and how retryMode controls whether a resumed job loads or discards saved state."
+---
+
+Checkpoints are the mechanism that makes `cl-pipelines` crash-safe. Every checkpoint is a small serialized record stored by your `StorageAdapter`. When a phase completes or explicitly saves progress, the library writes a new checkpoint. When the pipeline finishes, it clears it. At no point is in-progress state held only in memory — if your process dies, the data survives in storage.
+
+## Checkpoint shape
+
+```typescript
+type Checkpoint<TState = unknown> = {
+  nextPhase: string;   // name of the next phase to execute
+  state: TState;       // arbitrary state between phases
+  createdAt: number;   // Unix timestamp (ms)
+};
+```
+
+The `nextPhase` field is the lookup key `advancePhase` uses to find the right `Phase` object. If you rename a phase in your code after a checkpoint has been written, the resume will fail with a "phase not found" error — handle renames carefully in production.
+
+## When checkpoints are written
+
+| Event | What is stored |
+|-------|----------------|
+| `runPipeline` called | `{ nextPhase: startPhase, state: initialState, createdAt: now }` |
+| Phase returns `{ kind: "next", nextPhase, state }` | `{ nextPhase, state, createdAt: now }` |
+| `ctx.saveState(state)` called mid-phase | `{ nextPhase: currentPhase, state, createdAt: now }` |
+| Phase throws or returns `{ kind: "error" }` | Checkpoint is **not modified** |
+| Phase returns `{ kind: "done" }` | Checkpoint is **cleared** (set to `null`) |
+
+<Note>
+  When `ctx.saveState(state)` is called, `nextPhase` is set to the **current** phase name — not the next one. This ensures that a crash re-enters the same phase, not skips ahead to the next one.
+</Note>
+
+## When checkpoints are cleared
+
+The checkpoint is set to `null` and `status` is set to `"complete"` only when a phase returns `{ kind: "done" }`. In all error cases — thrown exceptions or `{ kind: "error" }` returns — the checkpoint is preserved so you can resume later.
+
+## Resume semantics
+
+When you call `runPipeline` on a job that already has a checkpoint, `retryMode` determines what happens:
+
+<Tabs>
+  <Tab title="resume (default)">
+    `resolveStartPhase` returns `checkpoint.nextPhase`. The existing checkpoint state is loaded and passed to the phase as `ctx.checkpoint.state`. Only the phase that was running (or waiting to run) at the time of the crash re-executes.
+
+    ```typescript
+    await runPipeline({
+      jobId,
+      phases,
+      storage,
+      scheduler,
+      initialState,
+      retryMode: "resume",
+    });
+    ```
+
+    This is the right default. Use it for your "Retry" button.
+  </Tab>
+  <Tab title="full">
+    The existing checkpoint is discarded entirely. The pipeline restarts from `initialPhase` (or `phases[0]`) with `initialState`. All previous progress is lost.
+
+    ```typescript
+    await runPipeline({
+      jobId,
+      phases,
+      storage,
+      scheduler,
+      initialState,
+      retryMode: "full",
+    });
+    ```
+
+    Use this when state has become corrupt, when `initialState` has materially changed, or when the user explicitly wants to start over. Label this button "Start over" or "Reset and retry" — not just "Retry".
+  </Tab>
+</Tabs>
+
+## Resume example: wiring a retry button
+
+The following shows how you might hook `runPipeline` to a "Retry" button in your application. Because `runPipeline` only writes to storage and enqueues a scheduler event, it's safe to call directly from a UI action or mutation handler:
+
+```typescript
+import { runPipeline } from "@claritylabs/cl-pipelines";
+
+// Wired to a "Retry" button in your UI
+async function handleRetry(jobId: string) {
+  await runPipeline({
+    jobId,
+    phases,
+    storage,
+    scheduler,
+    initialState,
+    retryMode: "resume",
+  });
+}
+```
+
+<Tip>
+  You don't need to check whether a checkpoint exists before calling `runPipeline` with `retryMode: "resume"`. If there's no checkpoint, the library falls back to starting fresh — the option is safe to use unconditionally as your retry default.
+</Tip>
+
+## Inspecting checkpoints in tests
+
+The in-memory storage adapter's `_inspect()` method lets you examine checkpoint state directly in tests:
+
+```typescript
+const jobs = storage._inspect();
+const job = jobs.get("my-job")!;
+
+console.log(job.checkpoint?.nextPhase);  // e.g. "enrich"
+console.log(job.checkpoint?.state);      // TState at time of last write
+console.log(job.checkpoint?.createdAt);  // Unix ms timestamp
+```
+
+<Warning>
+  `storage._inspect()` is a test-only helper. Never read checkpoint state directly in production code — use `StorageAdapter.getJob()` instead.
+</Warning>

@@ -1,0 +1,159 @@
+---
+title: "Defining Tools for CL Pipelines Agent Loop"
+sidebarTitle: "Tools"
+description: "Define AI SDK v6 tools with inputSchema and execute, pass them to runAgent, and understand how tool results flow through the agent checkpoint."
+---
+
+Agent tools in `cl-pipelines` use the Vercel AI SDK v6 `tool()` factory. A tool has a `description` the model reads to decide when to call it, a Zod `inputSchema` that constrains its arguments, and an async `execute` function that runs the actual logic. The library handles everything else: calling `execute`, collecting the result, appending it to the message history, and persisting it in the checkpoint.
+
+## Defining a tool
+
+```typescript
+import { tool } from "ai";
+import { z } from "zod";
+
+const lookupPolicy = tool({
+  description: "Look up a policy by number and return its summary.",
+  inputSchema: z.object({
+    policyNumber: z.string().describe("The policy number, e.g. POL-00123"),
+  }),
+  execute: async ({ policyNumber }) => {
+    const policy = await db.policies.findByNumber(policyNumber);
+    if (!policy) return { found: false };
+    return { found: true, summary: policy.summary, status: policy.status };
+  },
+});
+```
+
+<Warning>
+  Use `inputSchema`, **not** `parameters`. The `parameters` key is the AI SDK v5 API. In v6, Zod schemas go in `inputSchema`.
+</Warning>
+
+## Passing tools to runAgent
+
+Pass your tools as a record keyed by the name the model will use to call them:
+
+```typescript
+await runAgent({
+  jobId: "job-002",
+  model: gateway("anthropic/claude-opus-4.7"),
+  tools: { lookupPolicy, getClientInfo, sendEmail },
+  system: "You are an insurance assistant. Use tools to answer questions about policies.",
+  initialMessages: [{ role: "user", content: "What is the status of policy POL-00123?" }],
+  storage,
+  scheduler,
+});
+```
+
+The record keys (`lookupPolicy`, `getClientInfo`, `sendEmail`) become the tool names in the model's context. Choose names that are descriptive — the model uses them alongside `description` to decide when and how to call each tool.
+
+## How tool results flow through the checkpoint
+
+When the model calls a tool, the following happens within a single turn:
+
+1. The model returns `finishReason: "tool-calls"` with one or more tool call objects
+2. The AI SDK calls each tool's `execute` function with the parsed arguments
+3. The SDK wraps each return value in a `role: "tool"` message
+4. Those messages are included in `result.response.messages`
+5. `cl-pipelines` appends the full `result.response.messages` array to `checkpoint.messages`
+6. The checkpoint is written to storage
+7. The next turn runs with the complete history (including tool results) as context
+
+This means tool calls and their results are always persisted before the next `generateText` call — a crash between turns will not cause a tool to be called twice.
+
+## Schema tips
+
+<CardGroup cols={2}>
+  <Card title="Describe every field" icon="tag">
+    Use `.describe()` on every field in your `inputSchema`. The model reads these descriptions to understand what value to pass. Undescribed fields lead to hallucinated or missing arguments.
+
+    ```typescript
+    z.object({
+      policyNumber: z.string()
+        .describe("The policy number, e.g. POL-00123"),
+    })
+    ```
+  </Card>
+  <Card title="Keep schemas focused" icon="minimize">
+    Each tool should do one thing. Fewer fields in `inputSchema` means less chance of the model hallucinating arguments or calling the tool incorrectly.
+  </Card>
+  <Card title="Return structured objects" icon="braces">
+    Return plain objects rather than raw strings. Structured responses give the model richer context and make it easier to write deterministic tests for your tools.
+
+    ```typescript
+    // ✅ structured
+    return { found: true, summary: "...", status: "active" };
+    // ❌ raw string
+    return "Policy found: active";
+    ```
+  </Card>
+  <Card title="Handle not-found gracefully" icon="circle-question">
+    Return a `{ found: false }` object rather than throwing when a record doesn't exist. The model can then decide how to handle the missing data rather than triggering an error phase.
+  </Card>
+</CardGroup>
+
+## Multiple tools example
+
+```typescript
+import { tool, gateway } from "ai";
+import { z } from "zod";
+import { runAgent, createMemoryStorage, createMemoryScheduler, buildAgentPhase, advancePhase } from "@claritylabs/cl-pipelines";
+import type { AgentCheckpoint } from "@claritylabs/cl-pipelines";
+
+const getClientInfo = tool({
+  description: "Get basic information about a client by their ID.",
+  inputSchema: z.object({
+    clientId: z.string().describe("The client's unique ID"),
+  }),
+  execute: async ({ clientId }) => {
+    const client = await db.clients.findById(clientId);
+    if (!client) return { found: false };
+    return { found: true, name: client.name, email: client.email };
+  },
+});
+
+const sendEmail = tool({
+  description: "Send an email to a client.",
+  inputSchema: z.object({
+    to: z.string().describe("Recipient email address"),
+    subject: z.string().describe("Email subject line"),
+    body: z.string().describe("Plain text email body"),
+  }),
+  execute: async ({ to, subject, body }) => {
+    await emailService.send({ to, subject, body });
+    return { sent: true };
+  },
+});
+
+const model = gateway("anthropic/claude-opus-4.7");
+const storage = createMemoryStorage<AgentCheckpoint>();
+const scheduler = createMemoryScheduler();
+const phases = [buildAgentPhase({ model, tools: { getClientInfo, sendEmail } })];
+
+scheduler._bind(async (jobId) => {
+  await advancePhase({ jobId, phases, storage, scheduler });
+});
+
+await runAgent({
+  jobId: "outreach-001",
+  model,
+  tools: { getClientInfo, sendEmail },
+  system: "You are a client outreach assistant. Look up client info and send them a welcome email.",
+  initialMessages: [{ role: "user", content: "Send a welcome email to client CL-99." }],
+  storage,
+  scheduler,
+  maxTurns: 5,
+});
+
+await scheduler.drain();
+```
+
+## Long-running tools
+
+In v0.1, all tool execution is synchronous within a single phase invocation. If a tool call takes longer than your scheduler's action timeout, the phase will time out and be retried from the last checkpoint — which means the tool call will run again.
+
+For expensive tools (e.g. calling an external ML service, processing a large file), extract the work into a dedicated pipeline phase that runs *before* the agent phase and stores its result in `TState`. Then pass the result to the agent via the initial messages or system prompt.
+
+<Note>
+  v0.2 will introduce `pendingToolCalls` support, allowing long-running tools to be modeled as pipeline phases that feed results back into the agent loop.
+</Note>

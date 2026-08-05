@@ -1,0 +1,95 @@
+---
+title: "Pipeline Retry Modes: Resume vs Full Reset"
+sidebarTitle: "Retry Modes"
+description: "Understand when to use resume vs full retry mode, how each interacts with checkpoints, and how to expose the right retry action in your UI."
+---
+
+When a pipeline job reaches `status: "error"`, you have two options for how to re-run it. The `retryMode` parameter on `runPipeline` controls which one you get. Choosing correctly means the difference between re-running only the failed work versus discarding everything and starting over.
+
+## RetryMode type
+
+```typescript
+type RetryMode = "resume" | "full";
+```
+
+## Mode behaviors
+
+| Mode | Behavior |
+|------|----------|
+| `"resume"` | Starts from the last saved checkpoint. Only the failed phase (or mid-phase position) re-runs. |
+| `"full"` | Discards checkpoint entirely. Restarts from `initialPhase` with `initialState`. |
+
+## When to use resume
+
+`"resume"` is the right default for almost every retry scenario. Because both `{ kind: "error" }` returns **and** thrown exceptions preserve the checkpoint, `"resume"` works correctly regardless of how the failure happened. Only the phase that was running at the time of the error re-executes — all earlier phases are skipped.
+
+Use `"resume"` when:
+- A transient external dependency failed (API timeout, network blip)
+- The phase threw an unexpected exception and you've deployed a fix
+- A `{ kind: "error" }` result was returned and you want to retry the same operation
+- Mid-phase `saveState` was called — resume picks up from the exact saved position
+
+Expose this as a **"Retry"** button in your UI. Users understand "retry" to mean "try again from where it failed."
+
+## When to use full
+
+`"full"` is the nuclear option. It discards all checkpoint state and forces a fresh run through every phase from the beginning. This is appropriate when:
+
+- The saved state itself has become corrupt or structurally invalid
+- You've changed `initialState` in a way that's incompatible with the stored checkpoint
+- The user explicitly wants to restart (e.g. they've edited the input document and want a clean run)
+- You've refactored phase logic in a way that makes resuming from an old checkpoint unsafe
+
+<Warning>
+  Label this button clearly — "Start over" or "Reset and retry" — not just "Retry". Users who click it will lose all progress from previous phases.
+</Warning>
+
+## Retry example
+
+Both modes use the same `runPipeline` call — only the `retryMode` value differs:
+
+```typescript
+import { runPipeline } from "@claritylabs/cl-pipelines";
+import type { RetryMode } from "@claritylabs/cl-pipelines";
+
+async function retryJob(jobId: string, mode: RetryMode) {
+  await runPipeline({
+    jobId,
+    phases,
+    storage,
+    scheduler,
+    initialState,
+    retryMode: mode,
+  });
+}
+
+// "Retry" button
+await retryJob("job-123", "resume");
+
+// "Start over" button
+await retryJob("job-123", "full");
+```
+
+<Note>
+  `runPipeline` only writes to storage and enqueues a scheduler event — it's safe to call from a UI action or mutation handler without worrying about execution timeouts.
+</Note>
+
+## What happens when retryMode is omitted
+
+If you call `runPipeline` without a `retryMode` and a checkpoint already exists, the library behaves as `"resume"`. If no checkpoint exists (fresh job or already-completed job), both modes produce the same result — a fresh run from `initialPhase`.
+
+<Tip>
+  You can always pass `retryMode: "resume"` explicitly on new jobs without any side effects. Making the intent explicit is cleaner than relying on the default, especially in code that may also handle re-runs.
+</Tip>
+
+## Combining with the UI components
+
+The `RetryButtons` UI component handles both modes in one component. Pass an `onRetry` handler that calls `retryJob` with the mode it receives:
+
+```typescript
+import { RetryButtons } from "@claritylabs/cl-pipelines/ui";
+
+<RetryButtons onRetry={(mode) => retryJob(jobId, mode)} />
+```
+
+`RetryButtons` renders a "Retry" button that calls `onRetry("resume")` and a "Restart" button that calls `onRetry("full")`. See [UI Components](/cl-pipelines/ui/components) for customization options.

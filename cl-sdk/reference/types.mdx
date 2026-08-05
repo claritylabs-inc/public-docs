@@ -1,0 +1,193 @@
+---
+title: "CL SDK TypeScript Type Reference"
+sidebarTitle: "Types"
+description: "TypeScript type and interface reference for CL SDK, covering provider callbacks, extraction, documents, source grounding, storage, agents, and PCE."
+---
+
+All types below are exported from `@claritylabs/cl-sdk` unless otherwise noted. Import them as named type imports to avoid bundling issues.
+
+```typescript
+import type { SourceSpan, AgentContext, ExtractionResult } from "@claritylabs/cl-sdk";
+```
+
+---
+
+## Provider Callback Types
+
+These types define the function signatures your application must implement and pass to CL SDK factory functions. CL SDK is provider-agnostic — you supply the LLM and embedding calls.
+
+<ResponseField name="GenerateText" type="(params: GenerateTextParams) => Promise<GenerateTextResult>">
+  Calls your LLM provider to generate a text completion. Used by query agents, application pipeline, and classification prompts.
+</ResponseField>
+
+<ResponseField name="GenerateObject<T>" type="(params: GenerateObjectParams<T>) => Promise<{ object: T }>">
+  Calls your LLM provider to generate a structured JSON object conforming to schema `T`. Used by the extractor, PCE agent, and all structured output steps.
+</ResponseField>
+
+<ResponseField name="EmbedText" type="(text: string) => Promise<number[]>">
+  Calls your embedding provider to produce a vector representation of a text string. Required by `createSqliteStore` and any `SourceStore` that uses vector search.
+</ResponseField>
+
+<ResponseField name="TokenUsage" type="{ inputTokens: number; outputTokens: number; totalTokens: number }">
+  Reported by the `onTokenUsage` callback passed to factory functions. Track costs per extraction or query call.
+</ResponseField>
+
+<ResponseField name="LogFn" type="(level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown) => void">
+  Optional logging callback accepted by factory functions. Wire it to your application logger.
+</ResponseField>
+
+---
+
+## Core Extraction Types
+
+<ResponseField name="ExtractorConfig" type="object">
+  Configuration passed to `createExtractor`. Includes `generateObject` (required), `sourceStore` (optional), `concurrency`, `onTokenUsage`, and `onProgress`.
+</ResponseField>
+
+<ResponseField name="ExtractionInput" type="string | URL | Uint8Array | { fileId: string } | { kind: 'docling_document'; document: DoclingDocument; sourceKind?: string }">
+  Union type for all accepted extraction inputs. Strings are treated as base64-encoded PDFs.
+</ResponseField>
+
+<ResponseField name="ExtractOptions" type="object">
+  Options passed to `extractor.extract()`. Includes `sourceSpans`, `documentId`, and `coverageRecovery`.
+</ResponseField>
+
+<ResponseField name="ExtractionResult" type="object">
+  The output of a successful extraction. Includes the extracted `InsuranceDocument`, `sourceSpans` used, `operationalProfile`, and token usage stats.
+</ResponseField>
+
+<ResponseField name="PolicyOperationalProfile" type="object">
+  A source-backed projection of product-critical facts: lines of business (as ACORD codes), effective date, expiration date, total insured value, key limits, and retentions. Every field is a `SourceBackedValue`.
+</ResponseField>
+
+<ResponseField name="SourceBackedValue<T>" type="{ value: T; spanId?: string; quote?: string; confidence?: number }">
+  A wrapper type that pairs an extracted value with its source span ID and the quoted text that supports it.
+</ResponseField>
+
+---
+
+## Document Types
+
+<ResponseField name="InsuranceDocument" type="PolicyDocument | QuoteDocument">
+  Top-level union type for all extracted documents. Discriminated by the `type` field: `"policy"` or `"quote"`.
+</ResponseField>
+
+<ResponseField name="PolicyDocument" type="object">
+  A bound insurance policy. Includes `id`, `type: 'policy'`, `metadata`, `coverages`, `endorsements`, `exclusions`, `conditions`, and `operationalProfile`.
+</ResponseField>
+
+<ResponseField name="QuoteDocument" type="object">
+  An insurance quote. Includes `id`, `type: 'quote'`, `metadata`, `coverages`, and `operationalProfile`. Quote documents may have incomplete coverage details.
+</ResponseField>
+
+<ResponseField name="Coverage" type="object">
+  Represents a single coverage line. Includes `type` (ACORD LOB code), `limit`, `deductible`, `retention`, `description`, and `sourceSpanId`.
+</ResponseField>
+
+<ResponseField name="DocumentMetadata" type="object">
+  Common metadata fields: `carrier`, `insuredName`, `policyNumber`, `quoteNumber`, `effectiveDate`, `expirationDate`, `formNumbers`, and `namedInsureds`.
+</ResponseField>
+
+<ResponseField name="DocumentNode" type="object">
+  A node in the document's structural hierarchy (form, endorsement, section, schedule). Used by the parser-grounded source node tree.
+</ResponseField>
+
+---
+
+## Source Grounding Types
+
+<ResponseField name="SourceSpan" type="object">
+  The smallest addressable source unit. Fields: `id`, `documentId`, `sourceKind`, `kind`, `text`, `hash`, `pageStart`, `pageEnd`, `sectionId`, `formNumber`, `sourceUnit`, `parentSpanId`, `table`, `location`, `metadata`. See the [Source Spans](/cl-sdk/source-grounding/source-spans) page for the full schema.
+</ResponseField>
+
+<ResponseField name="SourceChunk" type="object">
+  A retrieval window produced by `chunkSourceSpans`. Fields: `id`, `documentId`, `text`, `spanIds` (source span IDs included in this chunk), `pageStart`, `pageEnd`.
+</ResponseField>
+
+<ResponseField name="DocumentSourceNode" type="object">
+  A node in the parser-grounded document hierarchy. Fields: `id`, `documentId`, `kind` (see below), `label`, `spanIds`, `children`, `pageStart`, `pageEnd`, `sectionId`, `formNumber`.
+</ResponseField>
+
+<ResponseField name="DocumentSourceNodeKind" type="string enum">
+  One of: `"document"` | `"page_group"` | `"form"` | `"endorsement"` | `"section"` | `"schedule"` | `"clause"` | `"table"` | `"row"` | `"cell"` | `"text"`
+</ResponseField>
+
+---
+
+## Storage Interfaces
+
+<ResponseField name="DocumentStore" type="interface">
+  `save`, `get`, `query`, `delete`. See [Storage Overview](/cl-sdk/storage/overview) for the full interface.
+</ResponseField>
+
+<ResponseField name="MemoryStore" type="interface">
+  `addChunks`, `search`, `addTurn`, `getHistory`, `searchHistory`. Handles document chunks and conversation history.
+</ResponseField>
+
+<ResponseField name="SourceStore" type="interface extends SourceRetriever">
+  `addSourceSpans`, `addSourceChunks`, `getSourceSpan`, `getSourceSpansByDocument`, `getSourceChunksByDocument`, `deleteDocumentSource`, plus all `SourceRetriever` methods.
+</ResponseField>
+
+<ResponseField name="DocumentChunk" type="object">
+  A chunk of document text stored in `MemoryStore`. Fields: `id`, `documentId`, `text`, `pageStart`, `pageEnd`, `metadata`.
+</ResponseField>
+
+<ResponseField name="ConversationTurn" type="object">
+  A single conversational exchange stored in `MemoryStore`. Fields: `id`, `conversationId`, `role` (`"user"` | `"assistant"`), `content`, `timestamp`, `metadata`.
+</ResponseField>
+
+---
+
+## Agent Types
+
+<ResponseField name="AgentContext" type="object">
+  Configuration for `buildAgentSystemPrompt`. See the [System Prompt](/cl-sdk/agent/system-prompt) page for all fields.
+</ResponseField>
+
+<ResponseField name="Platform" type="string enum">
+  `"email"` | `"chat"` | `"sms"` | `"slack"` | `"discord"`
+</ResponseField>
+
+<ResponseField name="CommunicationIntent" type="string enum">
+  `"direct"` | `"mediated"` | `"observed"`
+</ResponseField>
+
+<ResponseField name="ToolDefinition" type="object">
+  Schema-only tool definition compatible with Claude `tool_use`. Fields: `name`, `description`, `input_schema` (`{ type: "object", properties, required? }`).
+</ResponseField>
+
+---
+
+## PCE Types
+
+<ResponseField name="PceCaseState" type="object">
+  Mutable state object managed by `createPceAgent`. Holds the list of `PolicyChangeItem` objects, retrieval evidence, validation issues, and the current execution phase.
+</ResponseField>
+
+<ResponseField name="PolicyChangeItem" type="object">
+  A single endorsed change: `id`, `changeType`, `description`, `evidence` (`PceEvidenceSource[]`), `validationIssues`, and `confidence`.
+</ResponseField>
+
+<ResponseField name="PceSubmissionPacket" type="object">
+  The final output of a PCE workflow. Fields: `caseId`, `createdAt`, `changeItems`, `evidenceSources`, `qualityReport`, and `submissionNarrative`.
+</ResponseField>
+
+<ResponseField name="PceExecutionMode" type="string enum">
+  `"auto"` | `"deterministic_tree"` | `"market_eval"` | `"hybrid"`
+</ResponseField>
+
+---
+
+## Case Types
+
+<ResponseField name="CaseValidationIssue" type="object">
+  A validation issue produced by `validatePceItems` or `validateQuotedEvidence`. Fields: `severity` (`"error"` | `"warning"` | `"info"`), `code`, `message`, `spanId`, `itemId`.
+</ResponseField>
+
+<ResponseField name="CaseCitation" type="object">
+  A quoted citation linking a case finding to a source span. Fields: `spanId`, `quote`, `pageStart`, `pageEnd`, `sectionId`.
+</ResponseField>
+
+<ResponseField name="MissingInfoQuestion" type="object">
+  A question generated when required information is absent from the source evidence. Fields: `id`, `question`, `context`, `requiredFor`, `priority`.
+</ResponseField>

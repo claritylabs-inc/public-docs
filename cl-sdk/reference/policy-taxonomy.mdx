@@ -1,0 +1,164 @@
+---
+title: "ACORD Line of Business Codes and Policy Taxonomy"
+sidebarTitle: "Policy Taxonomy"
+description: "Use the policy-taxonomy sub-path export to validate, normalize, and label ACORD LOB codes across all 107 accepted commercial and personal lines."
+---
+
+The `@claritylabs/cl-sdk/policy-taxonomy` sub-path export gives you a validated, normalized set of ACORD Line of Business codes for use across extraction, operational profiles, and reporting. All 107 accepted codes are available as a Zod enum, a plain array, a label map, and full entry objects. Normalization functions translate legacy policy type strings and free-text descriptions into canonical ACORD codes.
+
+## Importing
+
+The taxonomy is a sub-path export — import it from the dedicated path rather than the root package.
+
+```typescript
+import {
+  AcordLobCodeSchema,
+  ACORD_LOB_CODES,
+  ACORD_LOB_LABELS,
+  ACORD_LOB_ENTRIES,
+  LEGACY_POLICY_TYPE_TO_LOB,
+  normalizeOperationalLinesOfBusiness,
+  resolveOperationalProfileLinesOfBusiness,
+  PERSONAL_LOB_CODES,
+} from "@claritylabs/cl-sdk/policy-taxonomy";
+```
+
+## Core Exports
+
+<ResponseField name="AcordLobCodeSchema" type="z.ZodEnum">
+  A Zod enum containing all 107 accepted ACORD LOB codes. Use `.parse()` to validate and narrow user input or LLM output to a known code.
+</ResponseField>
+
+<ResponseField name="ACORD_LOB_CODES" type="AcordLobCode[]">
+  Plain array of all 107 ACORD codes. Useful for populating dropdowns, building filter UIs, or iterating over all supported lines.
+</ResponseField>
+
+<ResponseField name="ACORD_LOB_LABELS" type="Record<AcordLobCode, string>">
+  Maps each ACORD code to its human-readable label. Use for display in reports, emails, and coverage comparison tables.
+</ResponseField>
+
+<ResponseField name="ACORD_LOB_ENTRIES" type="Array<{ code: AcordLobCode; label: string }>">
+  Full entry objects with `code` and `label` for each supported line. Convenient for building select options with both value and display text.
+</ResponseField>
+
+<ResponseField name="LEGACY_POLICY_TYPE_TO_LOB" type="Record<string, AcordLobCode>">
+  Maps legacy `policyType` string values (e.g. `"general_liability"`, `"commercial_auto"`) to canonical ACORD codes. Used internally by the extractor's migration layer.
+</ResponseField>
+
+<ResponseField name="PERSONAL_LOB_CODES" type="Set<AcordLobCode>">
+  A `Set` of ACORD codes for personal lines. Use `PERSONAL_LOB_CODES.has(code)` to distinguish personal lines from commercial lines in mixed-book workflows.
+</ResponseField>
+
+## Example Usage
+
+```typescript
+import {
+  AcordLobCodeSchema,
+  ACORD_LOB_LABELS,
+  normalizeOperationalLinesOfBusiness,
+} from "@claritylabs/cl-sdk/policy-taxonomy";
+
+// Validate a code from user input or LLM output
+const code = AcordLobCodeSchema.parse("CGL");
+// → "CGL" (throws ZodError if invalid)
+
+// Get the human-readable label
+const label = ACORD_LOB_LABELS["CGL"];
+// → "Commercial General Liability"
+
+// Normalize free-text or legacy strings to ACORD codes
+const codes = normalizeOperationalLinesOfBusiness([
+  "general_liability",
+  "commercial_auto",
+  "workers comp",
+]);
+// → ["CGL", "AUTOB", "WORK"]
+```
+
+## Normalization Functions
+
+### `normalizeOperationalLinesOfBusiness(vals)`
+
+Accepts an array of strings — legacy type names, common shorthand, or LLM-generated labels — and returns the corresponding array of validated `AcordLobCode` values. Values that cannot be mapped are silently omitted.
+
+```typescript
+const codes = normalizeOperationalLinesOfBusiness([
+  "general_liability",
+  "commercial_auto",
+  "epl",
+  "unknown_line_xyz",   // omitted — no mapping found
+]);
+// → ["CGL", "AUTOB", "EPLI"]
+```
+
+### `resolveOperationalProfileLinesOfBusiness(profile)`
+
+Accepts a `PolicyOperationalProfile` and returns the ACORD codes it represents, combining both explicit code fields and normalized legacy type fields from the profile.
+
+```typescript
+const codes = resolveOperationalProfileLinesOfBusiness(operationalProfile);
+// → ["CGL", "UMBRC"]
+```
+
+<Note>
+  Always run LLM-generated line-of-business strings through `normalizeOperationalLinesOfBusiness` before storing them. The function handles case variation, underscores vs. spaces, and common abbreviations so your stored codes are always canonical ACORD values.
+</Note>
+
+## Common Commercial Lines Codes
+
+| Code | Coverage |
+|------|----------|
+| `CGL` | Commercial General Liability |
+| `PROPC` | Commercial Property |
+| `AUTOB` | Business Auto |
+| `WORK` | Workers Compensation |
+| `UMBRC` | Commercial Umbrella |
+| `EXLIA` | Excess Liability |
+| `EO` | Errors & Omissions (Professional Liability) |
+| `DO` | Directors & Officers |
+| `EPLI` | Employment Practices Liability |
+| `CRIME` | Commercial Crime |
+| `BOP` | Business Owner's Policy |
+| `OLIB` | Other Liability |
+| `UN` | Unknown / Other |
+
+## Using Codes in Extraction
+
+The extractor automatically maps extracted coverage types to ACORD codes in the `PolicyOperationalProfile`. You can validate or override them using the schema:
+
+```typescript
+import { AcordLobCodeSchema, ACORD_LOB_LABELS } from "@claritylabs/cl-sdk/policy-taxonomy";
+
+const profile = extractionResult.operationalProfile;
+
+for (const lobEntry of profile.linesOfBusiness) {
+  const validated = AcordLobCodeSchema.safeParse(lobEntry.value);
+  if (validated.success) {
+    console.log(`${validated.data}: ${ACORD_LOB_LABELS[validated.data]}`);
+  } else {
+    console.warn(`Unrecognized LOB code: ${lobEntry.value}`);
+  }
+}
+```
+
+<Tip>
+  Use `ACORD_LOB_LABELS` to build human-readable coverage summaries in emails and reports. The labels match standard industry terminology that brokers and insureds recognize.
+</Tip>
+
+## Personal Lines
+
+The `PERSONAL_LOB_CODES` set includes all personal auto, homeowners, renters, umbrella, and specialty personal lines codes. Use it to branch your processing logic when your book includes both commercial and personal lines:
+
+```typescript
+import { PERSONAL_LOB_CODES } from "@claritylabs/cl-sdk/policy-taxonomy";
+
+const isPersonalLines = profile.linesOfBusiness.some(
+  (lob) => PERSONAL_LOB_CODES.has(lob.value as AcordLobCode),
+);
+
+if (isPersonalLines) {
+  // Route to personal lines workflow
+} else {
+  // Route to commercial lines workflow
+}
+```

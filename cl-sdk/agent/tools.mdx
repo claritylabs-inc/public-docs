@@ -1,0 +1,180 @@
+---
+title: "Agent Tool Definitions for Insurance Operations"
+sidebarTitle: "Tools"
+description: "CL SDK exports Claude tool_use-compatible schema-only tool definitions for document lookup, COI generation, and coverage comparison."
+---
+
+CL SDK exports schema-only tool definitions that are compatible with Claude's `tool_use` API, the Vercel AI SDK, and any other provider that accepts JSON Schema tool descriptions. CL SDK gives you the definitions — the typed input schemas and descriptions — and you implement the execution logic. This separation means the agent can be provider-agnostic while your business logic stays in your own codebase.
+
+## Available Tools
+
+### DOCUMENT_LOOKUP_TOOL
+
+Search and retrieve insurance documents by ID, policy number, carrier, or free-text query. The agent calls this tool when a user refers to a policy or quote without specifying an exact document ID.
+
+```typescript
+import { DOCUMENT_LOOKUP_TOOL } from "@claritylabs/cl-sdk";
+
+// Input schema:
+// {
+//   id?: string;              — exact document ID
+//   query?: string;           — free-text search
+//   documentType?: "policy" | "quote";
+// }
+```
+
+### COI_GENERATION_TOOL
+
+Request generation of a Certificate of Insurance for a specific policy. The agent calls this when a user asks for a COI and `coiHandling` is set to permit self-service generation.
+
+```typescript
+import { COI_GENERATION_TOOL } from "@claritylabs/cl-sdk";
+
+// Input schema:
+// {
+//   policyId: string;             — required
+//   holderName: string;           — certificate holder name
+//   holderAddress?: string;
+//   additionalInsured?: boolean;
+// }
+```
+
+### COVERAGE_COMPARISON_TOOL
+
+Compare coverages across two or more insurance documents. The agent calls this when a user asks to compare quotes, check renewal differences, or evaluate competing options.
+
+```typescript
+import { COVERAGE_COMPARISON_TOOL } from "@claritylabs/cl-sdk";
+
+// Input schema:
+// {
+//   documentIds: string[];       — at least two document IDs
+//   policyTypes?: string[];      — optional filter by coverage line
+// }
+```
+
+## ToolDefinition Type
+
+All exported tool constants satisfy the `ToolDefinition` interface:
+
+```typescript
+interface ToolDefinition {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+```
+
+This matches the shape expected by the Anthropic Messages API `tools` array directly.
+
+## Using All Tools Together
+
+`AGENT_TOOLS` is a convenience export that bundles all three tool definitions into a single array. Use it with `buildAgentSystemPrompt` for a complete agent setup.
+
+```typescript
+import { AGENT_TOOLS, buildAgentSystemPrompt } from "@claritylabs/cl-sdk";
+import { generateText } from "ai";
+
+const systemPrompt = buildAgentSystemPrompt(ctx);
+
+const { text, toolCalls } = await generateText({
+  model: yourModel,
+  system: systemPrompt,
+  tools: Object.fromEntries(
+    AGENT_TOOLS.map((tool) => [
+      tool.name,
+      {
+        description: tool.description,
+        parameters: tool.input_schema,
+      },
+    ]),
+  ),
+  messages: conversationHistory,
+});
+
+// Handle tool calls in your execution layer
+for (const call of toolCalls) {
+  switch (call.toolName) {
+    case "document_lookup":
+      const doc = await myDocumentStore.query({
+        policyNumber: call.args.id,
+      });
+      // Return result to the agent via tool result message
+      break;
+
+    case "coi_generation":
+      const pdf = await myCOIGenerator.generate({
+        policyId: call.args.policyId,
+        holderName: call.args.holderName,
+        additionalInsured: call.args.additionalInsured ?? false,
+      });
+      break;
+
+    case "coverage_comparison":
+      const comparison = await myCoverageComparer.compare(
+        call.args.documentIds,
+      );
+      break;
+  }
+}
+```
+
+<Note>
+  CL SDK does not execute tool calls. Your application is responsible for implementing the handler for each tool name and returning the tool result back to the LLM in the next message turn.
+</Note>
+
+## Selective Tool Registration
+
+You can register a subset of tools if your agent doesn't support all operations. For example, an agent that handles read-only queries should omit `COI_GENERATION_TOOL`:
+
+```typescript
+import {
+  DOCUMENT_LOOKUP_TOOL,
+  COVERAGE_COMPARISON_TOOL,
+} from "@claritylabs/cl-sdk";
+
+const readOnlyTools = [DOCUMENT_LOOKUP_TOOL, COVERAGE_COMPARISON_TOOL];
+
+const tools = Object.fromEntries(
+  readOnlyTools.map((tool) => [
+    tool.name,
+    {
+      description: tool.description,
+      parameters: tool.input_schema,
+    },
+  ]),
+);
+```
+
+<Tip>
+  Registering only the tools your agent can actually handle prevents the LLM from calling tools that have no handler. This is especially useful in read-only contexts, embedded widgets, or agent configurations with restricted permissions.
+</Tip>
+
+## Adding Custom Tools
+
+To add your own tools alongside the CL SDK definitions, define them using the same `ToolDefinition` shape and merge the arrays:
+
+```typescript
+import { AGENT_TOOLS } from "@claritylabs/cl-sdk";
+import type { ToolDefinition } from "@claritylabs/cl-sdk";
+
+const RENEWAL_REMINDER_TOOL: ToolDefinition = {
+  name: "schedule_renewal_reminder",
+  description: "Schedule a renewal reminder for a policy that is expiring.",
+  input_schema: {
+    type: "object",
+    properties: {
+      policyId: { type: "string", description: "The policy to remind about" },
+      daysBeforeExpiry: { type: "number", description: "Days before expiry to send reminder" },
+      recipientEmail: { type: "string", description: "Email address to send the reminder to" },
+    },
+    required: ["policyId", "daysBeforeExpiry", "recipientEmail"],
+  },
+};
+
+const allTools = [...AGENT_TOOLS, RENEWAL_REMINDER_TOOL];
+```

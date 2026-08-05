@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Clarity Labs SDKs",
+  "projectType": "sdk-library",
+  "projectName": "Clarity Labs SDKs",
+  "projectDescription": "Three open-source TypeScript SDKs for building regulated AI agents: cl-sdk for insurance intelligence primitives, cl-sync for local-first browser sync, and cl-pipelines for durable workflow execution.",
   "theme": "luma",
-  "colors": {
-    "primary": "#5B6AF0",
-    "light": "#7C88F5",
-    "dark": "#3D4EE8"
-  },
-  "favicon": "/favicon.svg",
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/claritylabs-inc"
-    }
-  },
+  "primaryColor": "#5B6AF0",
+  "lightColor": "#7C88F5",
+  "darkColor": "#3D4EE8",
   "navigation": {
     "tabs": [
       {
@@ -162,9 +150,42 @@
       }
     ]
   },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/claritylabs-inc"
-    }
-  }
+  "keyFeatures": [
+    "Provider-agnostic LLM integration via plain callback functions",
+    "Source-tree extraction from PDF spans with cited operational facts",
+    "Citation-backed query agent with sub-question decomposition",
+    "Policy Change Endorsement (PCE) intake and submission packet generation",
+    "Insurance application processing with question graphs and auto-fill",
+    "Local-first IndexedDB sync with scoped persistence and React hooks",
+    "Durable multi-phase pipeline execution with crash-safe checkpoints",
+    "LLM agent loop with per-turn checkpointing and tool call support",
+    "Convex adapter for both cl-sync and cl-pipelines",
+    "Headless React UI components for pipeline status and retry actions",
+    "107 canonical ACORD LOB codes with normalization utilities",
+    "Composable agent system prompts for email, chat, SMS, Slack, Discord",
+    "SQLite reference implementation for DocumentStore, MemoryStore, SourceStore",
+    "Apache-2.0 licensed, published to npm, ESM + CJS dual output"
+  ],
+  "publicApiSurface": [
+    "@claritylabs/cl-sdk: createExtractor(config)",
+    "@claritylabs/cl-sdk: createQueryAgent(config)",
+    "@claritylabs/cl-sdk: createApplicationPipeline(config)",
+    "@claritylabs/cl-sdk: createPceAgent(config)",
+    "@claritylabs/cl-sdk: buildPageSourceSpans(pages)",
+    "@claritylabs/cl-sdk: createSqliteStore(options)",
+    "@claritylabs/cl-sdk: buildAgentSystemPrompt(ctx)",
+    "@claritylabs/cl-sdk/policy-taxonomy: AcordLobCodeSchema, ACORD_LOB_LABELS",
+    "@claritylabs/cl-sdk/storage/sqlite: createSqliteStore",
+    "@claritylabs/cl-sync: createSyncStore(config)",
+    "@claritylabs/cl-sync: defineCollection(definition)",
+    "@claritylabs/cl-sync: defineMutation(definition)",
+    "@claritylabs/cl-sync/react: SyncProvider, useSyncCollection, useSyncRecord, useSyncMutation, useSyncStatus",
+    "@claritylabs/cl-sync/convex: defineConvexCollection, defineConvexMutation, subscribeConvexCollection",
+    "@claritylabs/cl-pipelines: runPipeline(args)",
+    "@claritylabs/cl-pipelines: advancePhase(args)",
+    "@claritylabs/cl-pipelines: runAgent(args)",
+    "@claritylabs/cl-pipelines: buildAgentPhase(opts)",
+    "@claritylabs/cl-pipelines/convex: pipelineFields, createConvexStorageAdapter, createConvexSchedulerAdapter",
+    "@claritylabs/cl-pipelines/ui: StatusBanner, ProgressLog, RetryButtons"
+  ]
 }

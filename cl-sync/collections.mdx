@@ -1,0 +1,157 @@
+---
+title: "Defining Collections in CL Sync"
+sidebarTitle: "Collections"
+description: "Define typed record sets with configurable persistence, query-key derivation, field redaction, and sort order for local-first sync."
+---
+
+A collection is a named set of records that CL Sync stores, indexes, and exposes through reactive hooks. You define collections using `defineCollection`, which is a typed identity helper — it returns the definition object unchanged while giving TypeScript full visibility into your record shape and query arguments.
+
+## Defining a collection
+
+```typescript
+import { defineCollection, type SyncRecord } from "@claritylabs/cl-sync";
+
+type Policy = SyncRecord & {
+  _id: string;
+  carrier: string;
+  policyNumber: string;
+  insuredName: string;
+};
+
+export const policyCollection = defineCollection<Policy, { orgId: string }>({
+  name: "policies",
+  getId: (p) => p._id,
+  deriveKey: (args) => args.orgId,
+  sort: (a, b) => a.insuredName.localeCompare(b.insuredName),
+  persist: true,
+});
+```
+
+The first type parameter is your record type (must extend `SyncRecord`). The second is the shape of query arguments, used to type `deriveKey` and the `args` parameter on `useSyncCollection`.
+
+## Collection options
+
+<ParamField path="name" type="string" required>
+  A unique identifier for the collection. This string is used as the IndexedDB object-store key prefix and must be stable across deployments.
+</ParamField>
+
+<ParamField path="getId" type="(record: TRecord) => SyncId">
+  Extracts the record's unique ID. Defaults to `record._id ?? record.id`. Override this when your records use a different ID field.
+</ParamField>
+
+<ParamField path="persist" type="boolean">
+  Whether to write records to IndexedDB. Defaults to `true`. Set to `false` for transient UI state that should not survive a page reload.
+</ParamField>
+
+<ParamField path="staleMs" type="number">
+  Milliseconds before a loaded collection slice is considered stale. After this threshold, `CollectionState.staleAt` is set, signalling that a fresh server fetch is worthwhile.
+</ParamField>
+
+<ParamField path="redactBeforePersist" type="(record: TRecord) => TRecord | null">
+  Called for every record before it is written to IndexedDB. Return a sanitized copy to strip sensitive fields. Return `null` to skip persistence for that record entirely.
+</ParamField>
+
+<ParamField path="sort" type="(a: TRecord, b: TRecord) => number">
+  A comparator applied when reading records from the store. Records are sorted in memory — you don't need to sort inside your components.
+</ParamField>
+
+<ParamField path="deriveKey" type="(args: TArgs) => string">
+  Converts query arguments into a stable string cache key. When `args` differ (e.g., different `orgId` values), results are stored under separate keys. If omitted, all records share a single cache key.
+</ParamField>
+
+## Examples
+
+### Basic collection
+
+The simplest collection uses all defaults — records are persisted, ID comes from `record._id ?? record.id`, and there is no argument-based cache partitioning.
+
+```typescript
+import { defineCollection, type SyncRecord } from "@claritylabs/cl-sync";
+
+type User = SyncRecord & { id: string; name: string; email: string };
+
+export const userCollection = defineCollection<User>({
+  name: "users",
+  getId: (u) => u.id,
+});
+```
+
+### Partitioned collection with sort
+
+Use `deriveKey` when your queries are scoped by a parent resource. Records for different `orgId` values will never mix in the cache.
+
+```typescript
+export const policyCollection = defineCollection<Policy, { orgId: string }>({
+  name: "policies",
+  getId: (p) => p._id,
+  deriveKey: (args) => args.orgId,
+  sort: (a, b) => a.insuredName.localeCompare(b.insuredName),
+});
+```
+
+### Redacting sensitive fields before persistence
+
+Use `redactBeforePersist` when you want the record in memory but don't want sensitive values written to disk.
+
+```typescript
+type AuthToken = SyncRecord & { id: string; accessToken: string; expiresAt: number };
+
+export const tokenCollection = defineCollection<AuthToken>({
+  name: "auth_tokens",
+  getId: (t) => t.id,
+  redactBeforePersist: (token) => ({
+    ...token,
+    accessToken: "[REDACTED]",
+  }),
+});
+```
+
+<Tip>
+  Returning `null` from `redactBeforePersist` skips the record entirely — the in-memory cache still holds it, but it won't appear in IndexedDB after a reload.
+</Tip>
+
+### Non-persisted (in-memory only) collection
+
+```typescript
+export const transientCollection = defineCollection({
+  name: "transient_ui_state",
+  persist: false,
+});
+```
+
+<Note>
+  Non-persisted collections are cleared when the page reloads. They behave identically to persisted collections in every other way, including subscriptions and hooks.
+</Note>
+
+## Reading a collection
+
+Call `store.getCollection` (or use `useSyncCollection` in React) with the definition and any query arguments:
+
+```typescript
+const policies = store.getCollection(policyCollection, { orgId: "org-123" });
+// Returns Policy[] | undefined
+// undefined = never loaded; [] = loaded but empty
+```
+
+The distinction between `undefined` and `[]` is intentional. `undefined` means the store has never received data for this cache key — you should trigger a fetch. `[]` means the server confirmed there are no records.
+
+## Collection state
+
+Each loaded slice also has associated `CollectionState` metadata:
+
+```typescript
+const state = store.getCollectionState(policyCollection, { orgId: "org-123" });
+/*
+{
+  key: "policies:org-123",
+  collection: "policies",
+  ids: ["pol-1", "pol-2"],
+  argsHash: "...",
+  updatedAt: 1710000000000,
+  staleAt?: 1710003600000,
+  error?: "Last fetch failed: 503"
+}
+*/
+```
+
+Use `staleAt` to decide whether to re-fetch even when records are present.

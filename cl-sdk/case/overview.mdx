@@ -1,0 +1,190 @@
+---
+title: "Case Workflow Primitives for Agent Flows"
+sidebarTitle: "Case Workflows"
+description: "Use shared case primitives — evidence, citations, validation, missing info, and submission artifacts — to build durable agent workflows beyond the built-in PCE pipeline."
+---
+
+Case workflow primitives are the shared building blocks that power the PCE agent and the application pipeline — but they're also exported directly so you can compose them into any durable agent flow you need. Whether you're building a claims intake agent, a COI request tracker, a renewal preparation workflow, or something entirely custom, these primitives give you grounded evidence, typed validation, structured missing-info questions, and submission artifacts without having to rebuild the scaffolding yourself.
+
+## Core Types
+
+<CardGroup cols={2}>
+  <Card title="CaseEvidenceSource" icon="file-lines">
+    Source text used for validation and citation. Carries a `sourceId`, raw text, and optional metadata like page number or document type.
+  </Card>
+  <Card title="CaseCitation" icon="quote-right">
+    A citation with a `sourceId`, exact `quote`, optional `page` number, and optional `fieldPath`. Used to ground claims in case items back to real source text.
+  </Card>
+  <Card title="CaseValidationIssue" icon="triangle-exclamation">
+    An `info`, `warning`, or `blocking` issue tied to an `itemId` and `fieldPath`. Blocking issues must be resolved before a submission packet is considered ready.
+  </Card>
+  <Card title="MissingInfoQuestion" icon="circle-question">
+    A question tied to an `itemId` and optional `fieldPath`. Surfaces required information that could not be inferred from the request or evidence sources.
+  </Card>
+  <Card title="CasePacketArtifact" icon="file-export">
+    A generated artifact — email draft, underwriter summary, JSON packet, or validation report — associated with a submission packet.
+  </Card>
+  <Card title="CaseState" icon="database">
+    The durable workflow state object. Carries items, evidence sources, validation issues, missing-info questions, citations, and execution status.
+  </Card>
+</CardGroup>
+
+---
+
+## Evidence Validation
+
+Use `validateQuotedEvidence()` to check that a citation's `quote` is genuinely present in the referenced source. Call this any time you accept a new citation — from a model, from a user, or from an external system.
+
+```typescript
+import { validateQuotedEvidence } from "@claritylabs/cl-sdk";
+
+const issues = validateQuotedEvidence({
+  itemId: "change-1",
+  fieldPath: "vehicle.vin",
+  quote: "VIN 1FTBW2CM5RKA12345",
+  citation: {
+    sourceId: "email-1",
+    quote: "VIN 1FTBW2CM5RKA12345",
+  },
+  sources,
+});
+
+if (issues.length > 0) {
+  // At least one issue was found — e.g. the quote doesn't appear in the source.
+  console.log(issues.map((i) => i.message));
+}
+```
+
+<ParamField path="itemId" type="string" required>
+  The ID of the case item this citation belongs to.
+</ParamField>
+
+<ParamField path="fieldPath" type="string">
+  Optional dot-separated field path the citation supports (e.g. `vehicle.vin`).
+</ParamField>
+
+<ParamField path="quote" type="string" required>
+  The text that should appear verbatim in the referenced source.
+</ParamField>
+
+<ParamField path="citation" type="CaseCitation" required>
+  The citation object to validate. Must include `sourceId` and `quote`.
+</ParamField>
+
+<ParamField path="sources" type="CaseEvidenceSource[]" required>
+  The evidence sources to check against. The validator looks for the `sourceId` in this list and confirms the `quote` is present in the source text.
+</ParamField>
+
+<Note>
+  `validateQuotedEvidence()` performs an exact substring match by default. Normalisation (whitespace collapsing, case folding) is applied before comparison so minor formatting differences don't produce false negatives.
+</Note>
+
+---
+
+## Proposal Scoring
+
+When your workflow generates multiple competing proposals for a case item — for example, different interpretations of an ambiguous request — use `evaluateCaseProposals()` to rank them before committing to one.
+
+```typescript
+import { evaluateCaseProposals } from "@claritylabs/cl-sdk";
+
+const ranked = evaluateCaseProposals(proposals);
+
+// ranked[0] is the highest-scoring proposal.
+console.log(ranked[0].scores);
+// {
+//   grounding: 0.92,
+//   completeness: 0.88,
+//   consistency: 1.0,
+//   determinism: 0.75,
+//   risk: 0.6,
+//   cost: 0.8,
+// }
+```
+
+Proposals are scored on six dimensions:
+
+| Dimension | What it measures |
+|---|---|
+| `grounding` | Fraction of claims supported by evidence citations |
+| `completeness` | Coverage of required fields and sub-items |
+| `consistency` | Internal consistency across items in the proposal |
+| `determinism` | How rule-deterministic the proposal is (vs. model-dependent) |
+| `risk` | Estimated carrier or compliance risk of the proposed change |
+| `cost` | Estimated token cost to execute the proposal |
+
+<Tip>
+  In most workflows you want the highest-scoring proposal on `grounding` and `completeness`. Use `risk` and `cost` as tiebreakers when multiple proposals score closely on the primary dimensions.
+</Tip>
+
+---
+
+## Stable IDs
+
+Case workflows often run as async jobs that may be retried or deduplicated. Use `stableCaseId()` to generate deterministic, hash-based identifiers so the same logical case always produces the same ID regardless of how many times it's processed.
+
+```typescript
+import { stableCaseId } from "@claritylabs/cl-sdk";
+
+const id = stableCaseId("case", [requestText, documentId, userId]);
+// → "case_a3f7d1c9b..."  (deterministic hash of the inputs)
+```
+
+<ParamField path="prefix" type="string" required>
+  A short label prepended to the hash — e.g. `"case"`, `"item"`, `"packet"`. Helps you identify the ID type at a glance.
+</ParamField>
+
+<ParamField path="inputs" type="string[]" required>
+  Array of strings that uniquely identify the entity. The hash is computed from the concatenation of these values in order.
+</ParamField>
+
+<Warning>
+  Input order matters — `stableCaseId("case", ["a", "b"])` and `stableCaseId("case", ["b", "a"])` produce different IDs. Establish a consistent ordering convention within your application.
+</Warning>
+
+---
+
+## Building a Custom Workflow
+
+These primitives compose naturally. Here's a sketch of a claims intake workflow built from case primitives:
+
+```typescript
+import {
+  validateQuotedEvidence,
+  evaluateCaseProposals,
+  stableCaseId,
+} from "@claritylabs/cl-sdk";
+
+// 1. Generate a stable ID for this intake
+const caseId = stableCaseId("claim", [claimantId, incidentDate, policyNumber]);
+
+// 2. Collect evidence from the claim submission
+const sources: CaseEvidenceSource[] = await collectEvidenceFromSubmission(
+  submission,
+);
+
+// 3. Generate and validate citations for each extracted claim detail
+for (const item of extractedItems) {
+  const issues = validateQuotedEvidence({
+    itemId: item.id,
+    fieldPath: item.fieldPath,
+    quote: item.citation.quote,
+    citation: item.citation,
+    sources,
+  });
+  item.validationIssues = issues;
+}
+
+// 4. Score any competing interpretations before committing
+const ranked = evaluateCaseProposals(competingProposals);
+const bestProposal = ranked[0];
+```
+
+<CardGroup cols={2}>
+  <Card title="PCE Overview" href="/cl-sdk/pce/overview" icon="pen-to-square">
+    See how these primitives are assembled in the built-in Policy Change Endorsement agent.
+  </Card>
+  <Card title="Application Pipeline" href="/cl-sdk/application/overview" icon="file-signature">
+    Explore how case state patterns apply to the application processing pipeline.
+  </Card>
+</CardGroup>

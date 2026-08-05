@@ -1,0 +1,176 @@
+---
+title: "PCE Workflow Phases and Execution Modes"
+sidebarTitle: "Workflow"
+description: "Walk through all 7 phases of the PCE state machine, execution mode selection logic, and the standalone helper functions available for custom integrations."
+---
+
+The PCE agent runs a 7-phase state machine for every change request. Each phase has a clear responsibility and produces output consumed by the next. You can run the full pipeline through `pce.processChangeRequest()`, or call individual phase helpers directly when you need more control over a custom workflow.
+
+## State Machine Phases
+
+<Steps>
+  <Step title="Collect Evidence">
+    `collectPceEvidenceSources()` merges any explicit sources you provide with results fetched through the configured `SourceRetriever`. The merged list becomes `state.evidenceSources` and is used for grounding in every subsequent phase.
+
+    ```typescript
+    import { collectPceEvidenceSources } from "@claritylabs/cl-sdk";
+
+    const evidence = await collectPceEvidenceSources(
+      { requestText, evidenceSources: explicitSources },
+      { sourceRetriever, retrievalLimit: 8 },
+    );
+    ```
+  </Step>
+
+  <Step title="Normalize Changes">
+    The request text is parsed into `PolicyChangeItem[]`. The SDK first attempts model-based structured extraction; if the model returns low-confidence output, a heuristic fallback parser runs to ensure at least a partial item list is available for downstream phases.
+
+    Each item includes:
+    - `fieldPath` — dot-separated path to the target policy field
+    - `proposedValue` — the value being added or modified
+    - `action` — `add` | `modify` | `remove`
+    - `citations` — source references that support the change
+    - `confidence` — extraction confidence score
+  </Step>
+
+  <Step title="Ask Missing Info">
+    After normalization, the agent checks each `PolicyChangeItem` against its field requirements. Any required field that cannot be resolved from evidence or the request text produces a `PceMissingInfoQuestion`. Each question is tied to an `itemId` and `fieldPath` so your UI can target the prompt precisely.
+
+    Check `state.missingInfoQuestions.length` before advancing to avoid generating an incomplete submission packet.
+  </Step>
+
+  <Step title="Validate Items">
+    `validatePceItems()` checks normalized items against the collected evidence. It produces `CaseValidationIssue[]` with severity levels:
+
+    - **`blocking`** — must be resolved or intentionally overridden before the case is considered submission-ready
+    - **`warning`** — should be reviewed but does not block packet generation
+    - **`info`** — informational notes for the reviewer
+
+    Validation checks include quote accuracy (is the cited text actually present in the source?), field path recognisability, and cross-item consistency.
+  </Step>
+
+  <Step title="Select Execution Mode">
+    `selectPceExecutionMode()` evaluates the normalised items, evidence confidence scores, and carrier constraints to pick the appropriate automation posture. When you pass `executionMode: "auto"` to `createPceAgent()`, this phase runs automatically.
+
+    | Mode | Selection criteria |
+    |---|---|
+    | `deterministic_tree` | All items are high-confidence, no missing info, carrier rules are deterministic |
+    | `market_eval` | Ambiguous items, low evidence confidence, or market-specific carrier constraints |
+    | `hybrid` | Mixed confidence — deterministic scaffolding with model interpretation for edge cases |
+  </Step>
+
+  <Step title="Build Submission Packet">
+    The agent assembles a `PceSubmissionPacket` containing carrier artifacts, validation issues, missing-info questions, and a timestamp. See the [Submission Packet guide](/cl-sdk/pce/submission-packet) for the full packet structure and quality gate API.
+  </Step>
+
+  <Step title="Human Review">
+    The generated packet is surfaced for review by a licensed user. The SDK does not submit to carriers — the packet is a draft until a reviewer confirms that evidence, missing-info status, and the validation report meet their standards.
+  </Step>
+</Steps>
+
+---
+
+## Processing a Reply to Missing-Info Questions
+
+When `state.missingInfoQuestions` is non-empty, present the questions to the user and pass their reply back to the agent. The agent re-runs normalization and validation against the enriched information.
+
+```typescript
+const reply = await pce.processReply({
+  state,
+  replyText: "The effective date should be June 1, 2026.",
+});
+
+// reply.state now has the updated items, reduced missingInfoQuestions,
+// and a fresh validation report.
+if (reply.state.missingInfoQuestions.length === 0) {
+  const packet = pce.generateSubmissionPacket({ state: reply.state });
+}
+```
+
+<Tip>
+  If your application has a structured form rather than free-text replies, you can construct `replyText` from the form values before passing it to `processReply()`. The agent treats it as plain text input.
+</Tip>
+
+---
+
+## Execution Modes in Detail
+
+<Tabs>
+  <Tab title="deterministic_tree">
+    **Use when:** All change items are high-confidence, no missing info remains, and carrier validation rules are deterministic (e.g. a well-described vehicle addition with VIN, year, make, model, and effective date all present).
+
+    This mode runs through a constrained rule tree without model-assisted interpretation, keeping latency and token cost low.
+  </Tab>
+
+  <Tab title="market_eval">
+    **Use when:** One or more items are ambiguous, evidence confidence is low, or the carrier has market-specific constraints that require heavier interpretation.
+
+    This mode adds model-assisted reasoning steps and flags more items for reviewer attention. Expect higher token usage and more detailed validation output.
+  </Tab>
+
+  <Tab title="hybrid">
+    **Use when:** Most items are clear but a few edge cases need model interpretation — for example, a multi-item request where the vehicle addition is deterministic but an accompanying coverage modification is ambiguous.
+
+    Deterministic scaffolding runs for high-confidence items; model-assisted interpretation runs only for items that need it.
+  </Tab>
+
+  <Tab title="auto">
+    **Use when:** You want the SDK to decide. `selectPceExecutionMode()` evaluates the case and picks `deterministic_tree`, `market_eval`, or `hybrid`. Recommended for production use unless you have a strong reason to force a specific mode.
+  </Tab>
+</Tabs>
+
+---
+
+## Standalone Helpers
+
+You can import and call PCE phase helpers directly for custom workflows, testing, or when you need fine-grained control over individual phases.
+
+```typescript
+import {
+  collectPceEvidenceSources,
+  validatePceItems,
+  selectPceExecutionMode,
+  stablePolicyChangeItemId,
+} from "@claritylabs/cl-sdk";
+```
+
+<ResponseField name="collectPceEvidenceSources(input, options)" type="Promise<CaseEvidenceSource[]>">
+  Merges explicit evidence sources with retriever results for a given `requestText`. Returns deduplicated `CaseEvidenceSource[]`.
+</ResponseField>
+
+<ResponseField name="validatePceItems(items, sources)" type="CaseValidationIssue[]">
+  Validates normalized `PolicyChangeItem[]` against `CaseEvidenceSource[]`. Returns issues grouped by `itemId` and `fieldPath`.
+</ResponseField>
+
+<ResponseField name="selectPceExecutionMode(state)" type='"deterministic_tree" | "market_eval" | "hybrid"'>
+  Evaluates a `PceCaseState` and returns the most appropriate execution mode.
+</ResponseField>
+
+<ResponseField name="stablePolicyChangeItemId(inputs)" type="string">
+  Generates a deterministic, hash-based ID for a change item from its field path and proposed value. Safe for deduplication and retry — the same logical change always produces the same ID.
+</ResponseField>
+
+---
+
+## Error Handling
+
+<Warning>
+  If `processChangeRequest()` resolves with `state.validationIssues` containing blocking issues and `state.missingInfoQuestions` is non-empty, do not proceed to `generateSubmissionPacket()`. The packet will be generated but the embedded quality report will reflect a `"failed"` gate status, and the artifacts will be marked as incomplete.
+</Warning>
+
+Always check both conditions before advancing:
+
+```typescript
+const { state } = await pce.processChangeRequest({ requestText, caseId });
+
+const hasBlockingIssues = state.validationIssues.some(
+  (issue) => issue.severity === "blocking",
+);
+
+if (state.missingInfoQuestions.length > 0 || hasBlockingIssues) {
+  // Resolve issues before generating the packet.
+  return;
+}
+
+const packet = pce.generateSubmissionPacket({ state });
+```

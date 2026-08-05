@@ -1,0 +1,318 @@
+---
+title: "CL SDK Model Callbacks: GenerateText, GenerateObject, EmbedText"
+sidebarTitle: "Models"
+description: "Full type reference and working provider examples for the three CL SDK callback types—wire up Anthropic, OpenAI, or the Vercel AI SDK in minutes."
+---
+
+CL SDK never calls a language model directly. Instead, you pass plain async functions—`GenerateText`, `GenerateObject`, and optionally `EmbedText`—to each factory. This keeps the SDK provider-agnostic: you own the model client, the retry logic, the token budget, and any observability instrumentation.
+
+## Callback type reference
+
+### `GenerateText`
+
+Used by query, application, PCE, and agent prompt workflows for free-text LLM generation.
+
+<ParamField body="prompt" type="string" required>
+  The user-turn prompt assembled by the SDK for this pipeline step.
+</ParamField>
+
+<ParamField body="system" type="string">
+  An optional system prompt. When present, pass it to your provider's system or instructions field.
+</ParamField>
+
+<ParamField body="maxTokens" type="number" required>
+  Maximum completion tokens the SDK requests for this call. Always respect this limit in your provider call.
+</ParamField>
+
+<ParamField body="taskKind" type="ModelTaskKind">
+  An optional hint identifying the logical task (e.g., `query_reasoning`, `application_extract_fields`). Use this to route different tasks to different models.
+</ParamField>
+
+<ParamField body="budgetDiagnostics" type="ModelBudgetResolution">
+  Optional structured budget metadata for extended thinking providers that support token budget negotiation.
+</ParamField>
+
+<ParamField body="providerOptions" type="Record<string, unknown>">
+  Pass-through options for provider-specific features. See [providerOptions keys](#provideroptions-keys) below.
+</ParamField>
+
+**Return type:**
+
+<ResponseField name="text" type="string" required>
+  The generated text completion.
+</ResponseField>
+
+<ResponseField name="usage" type="TokenUsage">
+  Optional token usage object with `inputTokens` and `outputTokens` fields. The SDK aggregates these for pipeline-level `tokenUsage` reporting.
+</ResponseField>
+
+```typescript
+type GenerateText = (params: {
+  prompt: string;
+  system?: string;
+  maxTokens: number;
+  taskKind?: ModelTaskKind;
+  budgetDiagnostics?: ModelBudgetResolution;
+  providerOptions?: Record<string, unknown>;
+}) => Promise<{ text: string; usage?: TokenUsage }>;
+```
+
+---
+
+### `GenerateObject`
+
+Used by the extraction pipeline and all structured workflow steps that need a typed, schema-validated response.
+
+<ParamField body="prompt" type="string" required>
+  The user-turn prompt for this structured generation call.
+</ParamField>
+
+<ParamField body="system" type="string">
+  Optional system prompt.
+</ParamField>
+
+<ParamField body="schema" type="ZodSchema<T>" required>
+  A Zod schema. Parse and validate the model's JSON response against this schema before returning.
+</ParamField>
+
+<ParamField body="maxTokens" type="number" required>
+  Maximum completion tokens for this call.
+</ParamField>
+
+<ParamField body="taskKind" type="ModelTaskKind">
+  Optional task kind hint for model routing. Extraction tasks include `extraction_operational_profile`, `extraction_coverage_cleanup`, and `extraction_coverage_recovery`.
+</ParamField>
+
+<ParamField body="budgetDiagnostics" type="ModelBudgetResolution">
+  Optional structured budget metadata for extended thinking.
+</ParamField>
+
+<ParamField body="providerOptions" type="Record<string, unknown>">
+  Pass-through provider options. For extraction, this carries `pdfBase64` for multimodal calls.
+</ParamField>
+
+**Return type:**
+
+<ResponseField name="object" type="T" required>
+  The parsed and schema-validated object.
+</ResponseField>
+
+<ResponseField name="usage" type="TokenUsage">
+  Optional token usage.
+</ResponseField>
+
+```typescript
+type GenerateObject<T = unknown> = (params: {
+  prompt: string;
+  system?: string;
+  schema: ZodSchema<T>;
+  maxTokens: number;
+  taskKind?: ModelTaskKind;
+  budgetDiagnostics?: ModelBudgetResolution;
+  providerOptions?: Record<string, unknown>;
+}) => Promise<{ object: T; usage?: TokenUsage }>;
+```
+
+---
+
+### `EmbedText`
+
+Used by `MemoryStore` implementations that support vector retrieval. Only required if you use semantic memory search.
+
+```typescript
+type EmbedText = (text: string) => Promise<number[]>;
+```
+
+## `providerOptions` keys
+
+The SDK populates `providerOptions` with structured data that your callback can forward to the provider. The keys you're most likely to use are:
+
+| Key | Type | Used in |
+|-----|------|---------|
+| `pdfBase64` | `string` | Extraction multimodal calls; attach as a `document` content block |
+| `sourceSpans` | `SourceSpan[]` | Source evidence passed alongside extraction and query prompts |
+| `sourceChunks` | `SourceChunk[]` | Grouped evidence windows for multi-chunk reasoning steps |
+| `attachments` | `QueryAttachment[]` | Image, PDF, or text attachments for query calls |
+| `images` | `ImageAttachment[]` | Image-only attachment payloads |
+
+## `taskKind` values
+
+Use `taskKind` to route heavy extraction tasks to a more capable model and lighter tasks to a faster one:
+
+| Value | Pipeline |
+|-------|----------|
+| `extraction_operational_profile` | Extraction — full operational profile generation |
+| `extraction_coverage_cleanup` | Extraction — coverage field cleanup pass |
+| `extraction_coverage_recovery` | Extraction — recovery from failed structured extraction |
+| `query_classify` | Query — question classification |
+| `query_reason` | Query — evidence reasoning pass |
+| `application_extract_fields` | Application — initial field extraction |
+| `application_autofill` | Application — auto-fill and backfill pass |
+
+## Callback usage by feature
+
+| Callback | Required for |
+|----------|-------------|
+| `generateText` | Query, application, PCE, and agent prompt workflows |
+| `generateObject` | Extraction and all structured workflow steps |
+| `embedText` | `MemoryStore` vector retrieval |
+| `convertPdfToImages` | Custom PDF/image workflows outside source-tree extraction |
+
+## Provider examples
+
+<Tabs>
+  <Tab title="Anthropic">
+    The Anthropic SDK supports multimodal `document` content blocks, which CL SDK uses to send the raw PDF to the model during extraction.
+
+    ```typescript
+    import Anthropic from "@anthropic-ai/sdk";
+    const client = new Anthropic();
+
+    const generateText = async ({ prompt, system, maxTokens, providerOptions }) => {
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: maxTokens,
+        system: system ? [{ type: "text", text: system }] : undefined,
+        messages: [{ role: "user", content: prompt }],
+      });
+      return {
+        text: response.content[0].type === "text" ? response.content[0].text : "",
+        usage: {
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+        },
+      };
+    };
+
+    const generateObject = async ({ prompt, system, schema, maxTokens, providerOptions }) => {
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: maxTokens,
+        system: system ? [{ type: "text", text: system }] : undefined,
+        messages: [
+          {
+            role: "user",
+            content: [
+              // Attach the PDF for multimodal extraction calls
+              ...(providerOptions?.pdfBase64
+                ? [
+                    {
+                      type: "document",
+                      source: {
+                        type: "base64",
+                        media_type: "application/pdf",
+                        data: providerOptions.pdfBase64,
+                      },
+                    },
+                  ]
+                : []),
+              // Attach any query attachments (images, PDFs, text)
+              ...((providerOptions?.attachments)?.flatMap((a) => {
+                if (a.kind === "image" && a.base64)
+                  return [{ type: "image", source: { type: "base64", media_type: a.mimeType, data: a.base64 } }];
+                if (a.kind === "pdf" && a.base64)
+                  return [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: a.base64 } }];
+                if (a.kind === "text" && a.text)
+                  return [{ type: "text", text: a.text }];
+                return [];
+              }) ?? []),
+              { type: "text", text: prompt },
+            ],
+          },
+        ],
+      });
+      const text = response.content[0].type === "text" ? response.content[0].text : "{}";
+      return {
+        object: schema.parse(JSON.parse(text)),
+        usage: {
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+        },
+      };
+    };
+    ```
+  </Tab>
+  <Tab title="OpenAI">
+    For OpenAI, pass the system prompt as a `system` role message and use `gpt-4o` or later for best structured-output quality.
+
+    ```typescript
+    import OpenAI from "openai";
+    const client = new OpenAI();
+
+    const generateText = async ({ prompt, system, maxTokens }) => {
+      const response = await client.chat.completions.create({
+        model: "gpt-4o",
+        max_tokens: maxTokens,
+        messages: [
+          ...(system ? [{ role: "system", content: system }] : []),
+          { role: "user", content: prompt },
+        ],
+      });
+      return {
+        text: response.choices[0]?.message?.content ?? "",
+        usage: {
+          inputTokens: response.usage?.prompt_tokens ?? 0,
+          outputTokens: response.usage?.completion_tokens ?? 0,
+        },
+      };
+    };
+    ```
+
+    <Warning>
+      The OpenAI `generateObject` callback must parse the model's JSON response and validate it against the `schema` parameter before returning. Use `schema.parse(JSON.parse(text))` or OpenAI's structured outputs feature.
+    </Warning>
+  </Tab>
+  <Tab title="Vercel AI SDK">
+    The Vercel AI SDK lets you switch underlying providers by swapping the model reference while keeping the same callback shape.
+
+    ```typescript
+    import {
+      generateText as aiGenerateText,
+      generateObject as aiGenerateObject,
+    } from "ai";
+    import { createAnthropic } from "@ai-sdk/anthropic";
+
+    const anthropic = createAnthropic();
+    const model = anthropic("claude-sonnet-4-6");
+
+    const generateText = async ({ prompt, system, maxTokens, providerOptions }) => {
+      const result = await aiGenerateText({
+        model,
+        prompt,
+        system,
+        maxTokens,
+        providerOptions,
+      });
+      return {
+        text: result.text,
+        usage: {
+          inputTokens: result.usage.promptTokens,
+          outputTokens: result.usage.completionTokens,
+        },
+      };
+    };
+
+    const generateObject = async ({ prompt, system, schema, maxTokens, providerOptions }) => {
+      const result = await aiGenerateObject({
+        model,
+        prompt,
+        system,
+        schema,
+        maxTokens,
+        providerOptions,
+      });
+      return {
+        object: result.object,
+        usage: {
+          inputTokens: result.usage.promptTokens,
+          outputTokens: result.usage.completionTokens,
+        },
+      };
+    };
+    ```
+
+    <Tip>
+      To switch from Anthropic to OpenAI with the Vercel AI SDK, replace `createAnthropic` with `createOpenAI` from `@ai-sdk/openai` and update the model string. The callback implementations above stay identical.
+    </Tip>
+  </Tab>
+</Tabs>

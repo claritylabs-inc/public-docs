@@ -1,0 +1,131 @@
+---
+title: "Storage and Scheduler Adapter Interfaces"
+sidebarTitle: "Overview"
+description: "Understand the StorageAdapter and SchedulerAdapter interfaces that connect cl-pipelines to your infrastructure, and use the in-memory adapters for testing."
+---
+
+`cl-pipelines` is infrastructure-agnostic by design. It never talks to a database or job queue directly — instead, it calls two narrow interfaces that you implement for your stack. This means the same pipeline logic works with Convex, PostgreSQL, Redis, or any other backend without changing a line of phase code.
+
+## StorageAdapter
+
+The `StorageAdapter` persists job status, checkpoint state, and log entries. You implement five methods:
+
+```typescript
+type StorageAdapter<TState> = {
+  getJob(jobId: string): Promise<{
+    status: PipelineStatus;
+    checkpoint: Checkpoint<TState> | null;
+    error?: string;
+  } | null>;
+  setStatus(jobId: string, status: PipelineStatus, error?: string): Promise<void>;
+  setCheckpoint(jobId: string, checkpoint: Checkpoint<TState> | null): Promise<void>;
+  appendLog(jobId: string, entry: LogEntry): Promise<void>;
+  clearLog(jobId: string): Promise<void>;
+};
+```
+
+<ResponseField name="getJob" type="(jobId: string) => Promise<JobRecord | null>">
+  Returns the current job record, or `null` if the job doesn't exist yet. The library calls this at the start of every `advancePhase` to read the current checkpoint.
+</ResponseField>
+
+<ResponseField name="setStatus" type="(jobId: string, status: PipelineStatus, error?: string) => Promise<void>">
+  Updates the job's status. When called with an error (e.g. `"error"` status), the `error` string should be persisted. When called without an error (e.g. `"complete"`), any previously stored error should be cleared.
+</ResponseField>
+
+<ResponseField name="setCheckpoint" type="(jobId: string, checkpoint: Checkpoint<TState> | null) => Promise<void>">
+  Writes or clears the checkpoint. Called with `null` when the pipeline completes.
+</ResponseField>
+
+<ResponseField name="appendLog" type="(jobId: string, entry: LogEntry) => Promise<void>">
+  Appends a single log entry to the job's log. Called each time a phase calls `ctx.log()`.
+</ResponseField>
+
+<ResponseField name="clearLog" type="(jobId: string) => Promise<void>">
+  Clears all log entries for a job. Called by the library when a job is reset via `retryMode: "full"`.
+</ResponseField>
+
+## SchedulerAdapter
+
+The `SchedulerAdapter` triggers `advancePhase` after each phase completes. It has one method:
+
+```typescript
+type SchedulerAdapter = {
+  scheduleAdvance(jobId: string, delayMs: number): Promise<void>;
+};
+```
+
+<ResponseField name="scheduleAdvance" type="(jobId: string, delayMs: number) => Promise<void>">
+  Enqueue a call to `advancePhase(jobId)` to run after `delayMs` milliseconds. The library always calls this with `delayMs: 0` in v0.1. Your implementation should delegate to your scheduler's equivalent of "run as soon as possible."
+</ResponseField>
+
+## In-memory adapters
+
+For local development and unit tests, `cl-pipelines` ships two fully-functional in-memory adapters:
+
+```typescript
+import {
+  createMemoryStorage,
+  createMemoryScheduler,
+  advancePhase,
+} from "@claritylabs/cl-pipelines";
+
+const storage = createMemoryStorage<AgentCheckpoint>();
+const scheduler = createMemoryScheduler();
+
+// Wire up for tests
+scheduler._bind(async (jobId) => {
+  await advancePhase({ jobId, phases, storage, scheduler });
+});
+
+// Run your pipeline...
+
+// After running, drain all scheduled advances synchronously
+await scheduler.drain();
+
+// Inspect final state (test-only)
+const jobs = storage._inspect();
+const job = jobs.get("job-001");
+console.log(job?.status);            // "complete"
+console.log(job?.checkpoint);        // null
+console.log(job?.log);               // LogEntry[]
+```
+
+<Note>
+  `scheduler._bind()` and `storage._inspect()` are test-only hooks (prefixed with `_` to signal this). In production, your `SchedulerAdapter.scheduleAdvance` delegates to a real durable scheduler, and you read job state through your `StorageAdapter.getJob`.
+</Note>
+
+## Implementing your own adapter
+
+To implement a `StorageAdapter` for a custom backend, create a plain object (or class) that satisfies the interface:
+
+```typescript
+import type { StorageAdapter, Checkpoint, PipelineStatus, LogEntry } from "@claritylabs/cl-pipelines";
+
+function createRedisStorageAdapter<TState>(redis: RedisClient): StorageAdapter<TState> {
+  return {
+    async getJob(jobId) {
+      const raw = await redis.get(`pipeline:${jobId}`);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    },
+    async setStatus(jobId, status, error) {
+      const existing = await this.getJob(jobId) ?? { status: "idle", checkpoint: null };
+      await redis.set(`pipeline:${jobId}`, JSON.stringify({ ...existing, status, error: error ?? null }));
+    },
+    async setCheckpoint(jobId, checkpoint) {
+      const existing = await this.getJob(jobId) ?? { status: "idle", checkpoint: null };
+      await redis.set(`pipeline:${jobId}`, JSON.stringify({ ...existing, checkpoint }));
+    },
+    async appendLog(jobId, entry) {
+      await redis.rpush(`pipeline:${jobId}:log`, JSON.stringify(entry));
+    },
+    async clearLog(jobId) {
+      await redis.del(`pipeline:${jobId}:log`);
+    },
+  };
+}
+```
+
+<Tip>
+  If you're using Convex, skip the custom implementation — use the pre-built `createConvexStorageAdapter` and `createConvexSchedulerAdapter` from `@claritylabs/cl-pipelines/convex`. See the [Convex adapter guide](/cl-pipelines/adapters/convex).
+</Tip>

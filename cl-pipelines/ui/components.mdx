@@ -1,0 +1,262 @@
+---
+title: "Pipeline UI Component Reference"
+sidebarTitle: "Components"
+description: "Full prop reference for StatusBanner, ProgressLog, and RetryButtons — the headless React components from @claritylabs/cl-pipelines/ui."
+---
+
+This page documents every prop for the three UI components exported from `@claritylabs/cl-pipelines/ui`. All components are headless — they render semantic HTML with `data-*` attributes and accept `className` props, but ship with no built-in styles.
+
+## StatusBanner
+
+`StatusBanner` is a compound component. Use `StatusBanner` (or `StatusBanner.Root`) as the wrapper, then compose the sub-components inside it. The wrapper renders `null` when `status` is `"idle"`, `"complete"`, or `undefined`.
+
+### StatusBanner.Root (StatusBanner)
+
+The container element. Renders a `<div data-status="...">` when visible.
+
+<ParamField path="status" type="PipelineStatus | undefined">
+  Controls visibility and the `data-status` attribute. Renders `null` for `"idle"`, `"complete"`, and `undefined`. Visible for `"running"`, `"paused"`, and `"error"`.
+</ParamField>
+
+<ParamField path="error" type="string">
+  Error message string. Passed through context to `StatusBanner.Description`.
+</ParamField>
+
+<ParamField path="log" type="LogEntry[]">
+  Log entries. Passed through context to any `ProgressLog` rendered as a child.
+</ParamField>
+
+<ParamField path="children" type="React.ReactNode" required>
+  Sub-components: `Indicator`, `Title`, `Description`, `Actions`.
+</ParamField>
+
+<ParamField path="className" type="string">
+  Class name applied to the root `<div>`.
+</ParamField>
+
+### StatusBanner.Indicator
+
+An inline element that marks the status visually. Renders a `<span data-indicator="...">` by default. Override with `render` to show a spinner or icon.
+
+<ParamField path="className" type="string">
+  Class name applied to the `<span>`.
+</ParamField>
+
+<ParamField path="render" type="(status: PipelineStatus) => React.ReactNode">
+  Custom render function. Return any React node — spinner, icon, badge — based on the current status.
+
+  ```tsx
+  <StatusBanner.Indicator
+    render={(status) => (
+      status === "running" ? <Spinner /> : <ErrorIcon />
+    )}
+  />
+  ```
+</ParamField>
+
+### StatusBanner.Title
+
+The title line. Renders a `<p data-role="title">` with a default text string based on status:
+
+| Status | Default text |
+|--------|-------------|
+| `"running"` | `"Running…"` |
+| `"error"` | `"Error"` |
+| `"paused"` | `"Paused"` |
+
+<ParamField path="children" type="React.ReactNode">
+  Override the default text with any content.
+</ParamField>
+
+<ParamField path="className" type="string">
+  Class name applied to the `<p>`.
+</ParamField>
+
+### StatusBanner.Description
+
+A secondary text line. Renders a `<p data-role="description">` showing the `error` string from the parent `Root` by default.
+
+<ParamField path="children" type="React.ReactNode">
+  Override the default (error string) with any content.
+</ParamField>
+
+<ParamField path="className" type="string">
+  Class name applied to the `<p>`.
+</ParamField>
+
+### StatusBanner.Actions
+
+A layout slot for action buttons. Renders a `<div data-role="actions">`.
+
+<ParamField path="children" type="React.ReactNode" required>
+  Any React content — typically a `RetryButtons` component.
+</ParamField>
+
+<ParamField path="className" type="string">
+  Class name applied to the `<div>`.
+</ParamField>
+
+---
+
+## ProgressLog
+
+Renders a list of `LogEntry` items. Renders `null` when `entries` is `undefined` or empty.
+
+Default list item markup:
+```html
+<li data-level="info|warn|error" data-phase="phase-name">
+  <time>HH:MM:SS</time>
+  <span>message</span>
+</li>
+```
+
+<ParamField path="entries" type="LogEntry[] | undefined">
+  The log entries to display. Renders `null` when `undefined` or empty.
+</ParamField>
+
+<ParamField path="latestOnly" type="boolean">
+  When `true`, shows only the last entry. Useful for compact status lines. Defaults to `false`.
+</ParamField>
+
+<ParamField path="limit" type="number">
+  Maximum number of entries to show. Shows the last `N` entries. Defaults to `10`.
+</ParamField>
+
+<ParamField path="className" type="string">
+  Class name applied to the `<ul>` container.
+</ParamField>
+
+<ParamField path="renderEntry" type="(entry: LogEntry, i: number) => React.ReactNode">
+  Custom render function for each list item. Return your own `<li>` or any element.
+
+  ```tsx
+  <ProgressLog
+    entries={job.log}
+    renderEntry={(entry, i) => (
+      <li key={i} className={`log-entry log-entry--${entry.level ?? "info"}`}>
+        {entry.message}
+      </li>
+    )}
+  />
+  ```
+</ParamField>
+
+---
+
+## RetryButtons
+
+Renders two buttons: a resume button (`"resume"` mode) and a restart button (`"full"` mode). Default labels are "Retry" and "Restart".
+
+<ParamField path="onRetry" type="(mode: RetryMode) => void" required>
+  Called with `"resume"` when the Retry button is clicked, and `"full"` when the Restart button is clicked.
+</ParamField>
+
+<ParamField path="disabled" type="boolean">
+  Disables both buttons when `true`. Use this while an async `runPipeline` call is in flight.
+</ParamField>
+
+<ParamField path="labels" type="{ resume?: string; full?: string }">
+  Override the default button labels. Defaults to `{ resume: "Retry", full: "Restart" }`.
+
+  ```tsx
+  <RetryButtons
+    onRetry={handleRetry}
+    labels={{ resume: "Try again", full: "Start over" }}
+  />
+  ```
+</ParamField>
+
+<ParamField path="renderButton" type="(mode: RetryMode, onClick: () => void, label: string, disabled: boolean) => React.ReactNode">
+  Custom render function for each button. Return any React node. Called once for `"resume"` and once for `"full"`.
+</ParamField>
+
+<ParamField path="className" type="string">
+  Class name applied to the wrapping `<div data-role="retry-buttons">`.
+</ParamField>
+
+### Tailwind example
+
+```tsx
+<RetryButtons
+  onRetry={(mode) => retryJob(jobId, mode)}
+  renderButton={(mode, onClick, label, disabled) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`px-4 py-2 rounded font-medium transition-opacity disabled:opacity-50 ${
+        mode === "full"
+          ? "bg-red-500 text-white hover:bg-red-600"
+          : "bg-blue-500 text-white hover:bg-blue-600"
+      }`}
+    >
+      {label}
+    </button>
+  )}
+/>
+```
+
+### CSS modules example
+
+```tsx
+import styles from "./PipelineActions.module.css";
+
+<RetryButtons
+  onRetry={(mode) => retryJob(jobId, mode)}
+  renderButton={(mode, onClick, label, disabled) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={mode === "full" ? styles.restartButton : styles.retryButton}
+      data-retry-mode={mode}
+    >
+      {label}
+    </button>
+  )}
+/>
+```
+
+---
+
+## Full composition example
+
+```tsx
+import { StatusBanner, ProgressLog, RetryButtons } from "@claritylabs/cl-pipelines/ui";
+
+function JobStatusWidget({ jobId }: { jobId: string }) {
+  const job = useJob(jobId);
+
+  return (
+    <div className="space-y-3">
+      <StatusBanner
+        status={job?.status}
+        error={job?.error}
+        className="rounded-lg border p-4"
+      >
+        <div className="flex items-center gap-3">
+          <StatusBanner.Indicator
+            render={(s) => s === "running" ? <Spinner /> : <ErrorBadge />}
+          />
+          <div>
+            <StatusBanner.Title className="font-semibold" />
+            <StatusBanner.Description className="text-sm text-gray-500" />
+          </div>
+        </div>
+        <StatusBanner.Actions className="mt-3 flex gap-2">
+          <RetryButtons
+            onRetry={(mode) => retryJob(jobId, mode)}
+            labels={{ full: "Start over" }}
+          />
+        </StatusBanner.Actions>
+      </StatusBanner>
+
+      <ProgressLog
+        entries={job?.log}
+        limit={5}
+        className="text-sm font-mono"
+      />
+    </div>
+  );
+}
+```

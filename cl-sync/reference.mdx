@@ -1,0 +1,227 @@
+---
+title: "CL Sync API Reference"
+sidebarTitle: "Reference"
+description: "Complete API reference for all exports across @claritylabs/cl-sync, @claritylabs/cl-sync/react, and @claritylabs/cl-sync/convex."
+---
+
+This page is a concise index of every public export in `@claritylabs/cl-sync`. Follow the links to each feature page for detailed explanations and usage examples.
+
+---
+
+## Core (`@claritylabs/cl-sync`)
+
+### Functions
+
+<ResponseField name="createSyncStore(config)" type="SyncStore">
+  Creates and returns a new `SyncStore` instance. Does not call `hydrate()` automatically — you must call `store.hydrate()` (or let `SyncProvider` do it) before reading data.
+
+  See [Store](/cl-sync/store) for the full `SyncStoreConfig` reference.
+</ResponseField>
+
+<ResponseField name="defineCollection<TRecord, TArgs>(definition)" type="CollectionDefinition<TRecord, TArgs>">
+  Identity helper for defining a typed collection. Returns `definition` unchanged. Exists for TypeScript inference.
+
+  See [Collections](/cl-sync/collections).
+</ResponseField>
+
+<ResponseField name="defineMutation<TArgs, TResult>(definition)" type="MutationDefinition<TArgs, TResult>">
+  Identity helper for defining a typed mutation. Returns `definition` unchanged.
+
+  See [Mutations](/cl-sync/mutations).
+</ResponseField>
+
+<ResponseField name="createScopeKey(scope)" type="string">
+  Derives a composite scope key string in the format `"appId:env:userId:orgId"`. Omitted optional fields produce an empty segment.
+
+  ```typescript
+  createScopeKey({ appId: "app", environment: "prod", userId: "u-1", orgId: "o-1" });
+  // → "app:prod:u-1:o-1"
+  ```
+</ResponseField>
+
+<ResponseField name="stableHash(value)" type="string">
+  Produces a deterministic JSON hash of `value` with object keys sorted. Used internally for `argsHash` in collection states.
+</ResponseField>
+
+---
+
+### Types
+
+<ResponseField name="SyncId" type="type">
+  `type SyncId = string`
+
+  The type for record identifiers throughout CL Sync.
+</ResponseField>
+
+<ResponseField name="SyncScope" type="interface">
+```typescript
+interface SyncScope {
+  appId: string;
+  environment?: string;
+  userId?: string;
+  orgId?: string;
+}
+```
+</ResponseField>
+
+<ResponseField name="SyncRecord" type="interface">
+```typescript
+interface SyncRecord {
+  _id?: unknown;
+  id?: unknown;
+  [key: string]: unknown;
+}
+```
+  Base type for all records stored in CL Sync collections.
+</ResponseField>
+
+<ResponseField name="SyncStoreConfig" type="interface">
+```typescript
+interface SyncStoreConfig {
+  scope: SyncScope;
+  schema?: SyncSchemaMetadata;
+  migrations?: readonly SyncMigration[];
+  mutations?: readonly MutationDefinition<any, any>[];
+  now?: () => number;
+  persistence?: "indexeddb" | "memory";
+}
+```
+</ResponseField>
+
+<ResponseField name="SyncStatus" type="interface">
+```typescript
+interface SyncStatus {
+  hydrated: boolean;
+  hydrating: boolean;
+  online: boolean;
+  pendingMutations: number;
+  lastSyncAt?: number;
+  lastError?: string;
+}
+```
+</ResponseField>
+
+<ResponseField name="CollectionDefinition<TRecord, TArgs>" type="interface">
+```typescript
+interface CollectionDefinition<TRecord, TArgs = unknown> {
+  name: string;
+  getId?: (record: TRecord) => SyncId;
+  persist?: boolean;
+  staleMs?: number;
+  redactBeforePersist?: (record: TRecord) => TRecord | null;
+  sort?: (a: TRecord, b: TRecord) => number;
+  deriveKey?: (args: TArgs) => string;
+}
+```
+  See [Collections](/cl-sync/collections).
+</ResponseField>
+
+<ResponseField name="MutationDefinition<TArgs, TResult>" type="interface">
+```typescript
+interface MutationDefinition<TArgs, TResult> {
+  name: string;
+  reducer?: (store: SyncStore, args: TArgs, clientMutationId: string) => void;
+  flush?: (args: TArgs, clientMutationId: string) => Promise<TResult>;
+  onAck?: (store: SyncStore, args: TArgs, result: TResult, clientMutationId: string) => void;
+  onReject?: (store: SyncStore, args: TArgs, error: unknown, clientMutationId: string) => void;
+}
+```
+  See [Mutations](/cl-sync/mutations).
+</ResponseField>
+
+<ResponseField name="OutboxItem<TArgs>" type="interface">
+```typescript
+interface OutboxItem<TArgs> {
+  id: string;
+  mutation: string;
+  args: TArgs;
+  scopeKey: string;
+  status: "pending" | "flushing" | "failed";
+  createdAt: number;
+  updatedAt: number;
+  attempts: number;
+  lastError?: string;
+}
+```
+</ResponseField>
+
+<ResponseField name="CollectionState" type="interface">
+```typescript
+interface CollectionState {
+  key: string;
+  collection: string;
+  ids: string[];
+  argsHash: string;
+  updatedAt: number;
+  staleAt?: number;
+  error?: string;
+}
+```
+</ResponseField>
+
+<ResponseField name="SyncMigration" type="interface">
+```typescript
+interface SyncMigration {
+  version: number;
+  name?: string;
+  migrate: (context: SyncMigrationContext) => void | Promise<void>;
+}
+```
+  See [Migrations](/cl-sync/migrations).
+</ResponseField>
+
+<ResponseField name="SyncMigrationContext" type="interface">
+  Provides typed read/write access to records, collection states, outbox items, and metadata during a migration. See [Migrations](/cl-sync/migrations) for the full interface.
+</ResponseField>
+
+<ResponseField name="FlushPendingMutationsOptions" type="interface">
+```typescript
+interface FlushPendingMutationsOptions {
+  mutations?: MutationDefinition<any, any>[];
+  includeFailed?: boolean;
+  predicate?: (item: OutboxItem<unknown>) => boolean;
+}
+```
+</ResponseField>
+
+<ResponseField name="FlushPendingMutationsResult" type="interface">
+```typescript
+interface FlushPendingMutationsResult {
+  flushed: string[];
+  failed: Array<{ id: string; mutation: string; error: unknown }>;
+  skipped: Array<{ id: string; mutation: string; reason: "missing_definition" | "flushing" | "filtered" }>;
+  pending: number;
+}
+```
+</ResponseField>
+
+---
+
+## React (`@claritylabs/cl-sync/react`)
+
+| Export | Signature | Description |
+|--------|-----------|-------------|
+| `SyncProvider` | `(props: SyncProviderProps) => JSX.Element` | Context provider. Hydrates the store on mount. See [Provider](/cl-sync/react/provider). |
+| `useSyncStore()` | `() => SyncStore` | Returns the `SyncStore` from context. |
+| `useSyncSelector<T>(selector)` | `(selector: (store: SyncStore) => T) => T` | Subscribes to derived state. Re-renders on reference change. |
+| `useSyncStatus()` | `() => SyncStatus` | Reactive `SyncStatus`. |
+| `useSyncCollection(definition, args?)` | `<TRecord, TArgs>(definition, args?) => TRecord[] \| undefined` | Reactive record array for a collection slice. |
+| `useSyncRecord(collection, id?)` | `<TRecord>(collection: string, id?: string) => TRecord \| undefined` | Reactive single record. |
+| `useSyncMutation(definition)` | `<TArgs, TResult>(definition) => (args, clientMutationId?) => Promise<TResult \| undefined>` | Stable mutation callback. |
+| `useHydratedValue(localValue, serverValue)` | `<T>(local: T \| undefined, server: T \| undefined) => T \| undefined` | Returns server value, then local value once hydrated, then `undefined`. |
+
+See [Hooks](/cl-sync/react/hooks) for detailed usage of each hook.
+
+---
+
+## Convex (`@claritylabs/cl-sync/convex`)
+
+| Export | Signature | Description |
+|--------|-----------|-------------|
+| `defineConvexCollection(definition)` | `(definition: ConvexCollectionDefinition) => ConvexCollectionDefinition` | Identity helper with Convex-typed `query` and `mapSnapshot` fields. |
+| `defineConvexMutation(client, definition)` | `(client: ConvexReactClient, definition) => MutationDefinition` | Wraps a Convex mutation reference as a `MutationDefinition.flush` implementation. |
+| `subscribeConvexCollection(store, client, definition, args, onError?)` | Returns `() => void` | Subscribes to a Convex query and syncs snapshots to the store in real time. |
+| `ConvexCollectionDefinition<TQuery, TRecord>` | type | `CollectionDefinition<TRecord>` extended with `query` and optional `mapSnapshot`. |
+| `ConvexMutationDefinition<TMutation, TArgs, TResult>` | type | `MutationDefinition<TArgs, TResult>` extended with `mutation` and optional `mapArgs`. |
+
+See [Convex Adapter](/cl-sync/convex-adapter) for detailed usage.

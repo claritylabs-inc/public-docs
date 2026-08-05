@@ -1,0 +1,191 @@
+---
+title: "Working with ExtractionResult and InsuranceDocument"
+sidebarTitle: "Applying Results"
+description: "Understand the ExtractionResult shape, narrow InsuranceDocument by type, persist source evidence, and track token usage after extraction."
+---
+
+Every call to `extractor.extract` returns an `ExtractionResult` — a single object that carries the compatibility document, the source tree, raw evidence spans, the operational profile, and diagnostic metadata. Understanding its shape lets you decide what to persist, what to index, and how to surface facts in your application.
+
+## ExtractionResult Interface
+
+```typescript
+interface ExtractionResult {
+  document: InsuranceDocument;            // Compatibility policy or quote projection
+  chunks: DocumentChunk[];                // Empty on v3 source-tree paths
+  sourceSpans: SourceSpan[];              // Source evidence spans
+  sourceChunks: SourceChunk[];            // Retrieval windows from source spans
+  sourceTree?: DocumentSourceNode[];      // Canonical source hierarchy
+  operationalProfile?: PolicyOperationalProfile; // Source-backed product facts
+  warnings?: string[];
+  tokenUsage: TokenUsage;                 // { inputTokens, outputTokens }
+  usageReporting: {
+    modelCalls: number;
+    callsWithUsage: number;
+    callsMissingUsage: number;
+  };
+  performanceReport: PerformanceReport;
+  reviewReport: ExtractionReviewReport;
+}
+```
+
+<ResponseField name="document" type="InsuranceDocument" required>
+  The compatibility projection of the extracted policy or quote. This is a discriminated union — see [Narrowing InsuranceDocument](#narrowing-insurancedocument) below.
+</ResponseField>
+
+<ResponseField name="chunks" type="DocumentChunk[]" required>
+  Always empty on v3 source-tree extraction paths. Retained for backward compatibility with older consumers.
+</ResponseField>
+
+<ResponseField name="sourceSpans" type="SourceSpan[]" required>
+  The normalized source evidence spans used during extraction. Persist these alongside your document for traceability and highlight rendering.
+</ResponseField>
+
+<ResponseField name="sourceChunks" type="SourceChunk[]" required>
+  Retrieval windows derived from source spans. Use these for RAG pipelines that need pre-chunked evidence windows.
+</ResponseField>
+
+<ResponseField name="sourceTree" type="DocumentSourceNode[]">
+  The canonical source hierarchy produced in phase 3. Present on all v3 extraction paths. Use this for document navigation, form inventory, and source-cited coverage lookup.
+</ResponseField>
+
+<ResponseField name="operationalProfile" type="PolicyOperationalProfile">
+  The structured, source-backed product facts extracted in phase 5. Prefer this over `document.coverages` for programmatic access to coverage lines with limits and source citations.
+</ResponseField>
+
+<ResponseField name="warnings" type="string[]">
+  Non-fatal issues the pipeline detected during extraction. Review these when `qualityGate` is set to `"warn"`.
+</ResponseField>
+
+<ResponseField name="tokenUsage" type="TokenUsage" required>
+  Aggregate token counts across all model calls in this extraction. Carries `inputTokens` and `outputTokens`.
+</ResponseField>
+
+<ResponseField name="usageReporting" type="object" required>
+  Metadata about model call tracking. `callsMissingUsage` greater than zero means some calls did not return token counts from the provider.
+</ResponseField>
+
+## Narrowing InsuranceDocument
+
+`InsuranceDocument` is a discriminated union of `PolicyDocument` and `QuoteDocument`. Narrow it with a `type` check before accessing type-specific fields:
+
+```typescript
+const { document } = result;
+
+if (document.type === "policy") {
+  console.log(document.policyNumber);   // string
+  console.log(document.effectiveDate);  // string
+  console.log(document.expirationDate); // string
+} else {
+  console.log(document.quoteNumber);           // string
+  console.log(document.proposedEffectiveDate); // string
+  console.log(document.subjectivities);        // Subjectivity[]
+  console.log(document.underwritingConditions); // string[]
+}
+```
+
+### Shared Fields
+
+Both `PolicyDocument` and `QuoteDocument` expose the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `carrier` | `string` | Insurer name |
+| `insuredName` | `string` | Named insured |
+| `premium` | `string` | Total premium |
+| `coverages` | `CoverageLine[]` | Flat compatibility coverage rows |
+| `documentMetadata` | `DocumentMetadata` | Form inventory, document dates, and source metadata |
+| `documentOutline` | `DocumentOutline` | Hierarchical outline derived from the source tree |
+| `endorsements` | `EndorsementReference[]` | Endorsement inventory |
+| `exclusions` | `string[]` | Notable exclusions |
+| `locations` | `Location[]` | Scheduled locations |
+| `vehicles` | `Vehicle[]` | Scheduled vehicles |
+
+### PolicyDocument-Specific Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `policyNumber` | `string` | Policy number as printed on the declarations page |
+| `effectiveDate` | `string` | Policy effective date |
+| `expirationDate` | `string` | Policy expiration date |
+
+### QuoteDocument-Specific Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `quoteNumber` | `string` | Quote or proposal number |
+| `proposedEffectiveDate` | `string` | Proposed effective date |
+| `subjectivities` | `Subjectivity[]` | Conditions required before binding |
+| `underwritingConditions` | `string[]` | Underwriting requirements |
+
+## Persisting Results
+
+Separate what you store: save the compatibility document to your policy store and the source tree plus spans to your source index. Keeping them in separate stores lets you query policy facts independently from raw evidence.
+
+```typescript
+const {
+  document,
+  sourceTree,
+  sourceSpans: resultSourceSpans,
+  tokenUsage,
+} = await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
+
+await documentStore.save(document);
+await sourceIndex.save({ sourceTree, sourceSpans: resultSourceSpans });
+```
+
+<Note>
+  Always persist `sourceSpans` alongside the source tree. Spans carry the bounding-box and text data your parser recorded — without them, you cannot reconstruct PDF highlights or re-run retrieval against the original evidence.
+</Note>
+
+## Tracking Token Usage
+
+Use `tokenUsage` and `usageReporting` together to build accurate cost attribution and to detect providers that don't return usage metadata:
+
+```typescript
+const { tokenUsage, usageReporting } = await extractor.extract(
+  pdfBase64,
+  "doc-123",
+  { sourceSpans }
+);
+
+console.log(
+  `Cost: ${tokenUsage.inputTokens} input + ${tokenUsage.outputTokens} output tokens`
+);
+console.log(
+  `Usage reported for ${usageReporting.callsWithUsage}/${usageReporting.modelCalls} model calls`
+);
+```
+
+<Warning>
+  If `usageReporting.callsMissingUsage` is greater than zero, your token totals are incomplete. This typically means the AI provider returned a response without a usage object. Check your provider configuration or upgrade to a model tier that includes usage reporting.
+</Warning>
+
+You can also stream per-call usage in real time by supplying `onTokenUsage` in the extractor config:
+
+```typescript
+const extractor = createExtractor({
+  generateObject,
+  onTokenUsage: (usage) => {
+    myMetrics.increment("cl_sdk.input_tokens", usage.inputTokens);
+    myMetrics.increment("cl_sdk.output_tokens", usage.outputTokens);
+  },
+});
+```
+
+## Handling Warnings
+
+When `qualityGate` is set to `"warn"`, the pipeline surfaces non-fatal issues in `result.warnings` instead of throwing. Check this array after every extraction in production:
+
+```typescript
+const result = await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
+
+if (result.warnings && result.warnings.length > 0) {
+  for (const warning of result.warnings) {
+    console.warn("[CL SDK]", warning);
+  }
+}
+```
+
+<Tip>
+  Log warnings to your observability platform with the `documentId` attached so you can correlate quality issues to specific documents without reprocessing.
+</Tip>

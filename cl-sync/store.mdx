@@ -1,0 +1,245 @@
+---
+title: "SyncStore: The Central State Container"
+sidebarTitle: "Store"
+description: "Create and configure a SyncStore, then use its methods to read, write, mutate, and subscribe to local-first sync state in your app."
+---
+
+The `SyncStore` is the single source of truth for all CL Sync state. It owns the IndexedDB connection for your scope, manages the in-memory record cache, coordinates the outbox, and notifies subscribers whenever state changes. You create it once with `createSyncStore` and share the instance across your component tree.
+
+## Creating a store
+
+```typescript
+import { createSyncStore } from "@claritylabs/cl-sync";
+
+const store = createSyncStore({
+  scope: {
+    appId: "my-app",
+    environment: import.meta.env.MODE,
+    userId: currentUser.id,
+  },
+  schema: {
+    version: 2,
+    collections: [
+      { name: "todos", version: 1, fields: ["id", "title", "completed"] },
+    ],
+  },
+  migrations: [renameTextToTitle],
+  mutations: [createTodo, updateTodo],
+  persistence: "indexeddb",
+});
+```
+
+### Configuration
+
+<ParamField path="scope" type="SyncScope" required>
+  Identifies the IndexedDB database for this session. Must include `appId`; `environment`, `userId`, and `orgId` are optional but strongly recommended to isolate data per user and organization.
+</ParamField>
+
+<ParamField path="schema" type="SyncSchemaMetadata">
+  Declares the current schema version and optional collection metadata. CL Sync compares `schema.version` against the persisted version during `hydrate()` to decide whether to run migrations.
+</ParamField>
+
+<ParamField path="migrations" type="readonly SyncMigration[]">
+  Ordered list of migration definitions. Each migration runs once when the persisted schema version is behind the configured version. See the [Migrations](/cl-sync/migrations) page for details.
+</ParamField>
+
+<ParamField path="mutations" type="readonly MutationDefinition[]">
+  Mutations to register immediately on store creation. Registered mutations are available for outbox replay without calling `registerMutation` separately.
+</ParamField>
+
+<ParamField path="now" type="() => number">
+  Override the timestamp function. Defaults to `Date.now`. Useful for deterministic tests.
+</ParamField>
+
+<ParamField path="persistence" type='"indexeddb" | "memory"'>
+  Storage backend. Defaults to `"indexeddb"`. Use `"memory"` for SSR or unit tests where IndexedDB is unavailable.
+</ParamField>
+
+## Lifecycle methods
+
+### `store.hydrate()`
+
+Loads all persisted records from IndexedDB, runs any pending migrations, restores the outbox, and sets `status.hydrated = true`. Always call `hydrate()` before reading data.
+
+```typescript
+await store.hydrate();
+// store.getStatus().hydrated === true
+```
+
+<Warning>
+  If the persisted schema version is **newer** than `schema.version`, `hydrate()` throws a version mismatch error to prevent data corruption from a downgrade. Bump `schema.version` before deploying schema changes.
+</Warning>
+
+### `store.clearScope()`
+
+Deletes all records, collection states, outbox items, and metadata for the active scope, then clears the in-memory cache.
+
+```typescript
+await store.clearScope();
+// Use on logout to prevent data leaks between users.
+```
+
+## Reading data
+
+### `store.getStatus()`
+
+Returns the current `SyncStatus` snapshot. Does not subscribe — use `store.subscribe` or `useSyncStatus()` for reactive updates.
+
+```typescript
+const { hydrated, hydrating, online, pendingMutations } = store.getStatus();
+```
+
+### `store.getCollection(definition, args?)`
+
+Returns the cached record array for a collection slice, or `undefined` if the slice has never been loaded.
+
+```typescript
+const todos = store.getCollection(todoCollection, { listId: "inbox" });
+// TRecord[] | undefined
+```
+
+### `store.getRecord(collection, id)`
+
+Returns a single cached record by collection name and ID, or `undefined` if not found.
+
+```typescript
+const todo = store.getRecord<Todo>("todos", "todo-123");
+```
+
+### `store.getCollectionState(definition, args?)`
+
+Returns the `CollectionState` metadata for a collection slice — including `updatedAt`, `staleAt`, and any `error` from the last fetch.
+
+```typescript
+const state = store.getCollectionState(todoCollection, { listId: "inbox" });
+// { key, collection, ids, argsHash, updatedAt, staleAt?, error? }
+```
+
+## Writing data
+
+### `store.upsertCollection(definition, args, records, options?)`
+
+Replaces the entire record set for a collection slice. Merges records into the shared record map, updates the collection state, and persists to IndexedDB.
+
+```typescript
+await store.upsertCollection(
+  todoCollection,
+  { listId: "inbox" },
+  fetchedTodos
+);
+```
+
+Use this method inside a mutation's `reducer` for optimistic updates, or after a server response to sync the latest snapshot.
+
+### `store.patchRecord(collection, id, patch)`
+
+Merges a partial patch into a single cached record and persists the change. The patch is shallow-merged using `Object.assign`.
+
+```typescript
+await store.patchRecord("todos", "todo-123", { completed: true });
+```
+
+## Mutation methods
+
+### `store.enqueueMutation(definition, args, clientMutationId?)`
+
+The main entry point for mutations. Runs the `reducer` immediately, writes to the outbox, then calls `flush`.
+
+```typescript
+await store.enqueueMutation(createTodo, {
+  id: crypto.randomUUID(),
+  listId: "inbox",
+  title: "Ship it",
+});
+```
+
+### `store.registerMutation(definition)` / `store.registerMutations(definitions)`
+
+Connects a mutation definition to its outbox rows so they can be flushed. Returns an unsubscribe function.
+
+```typescript
+const unregister = store.registerMutations([createTodo, updateTodo, deleteTodo]);
+// Call unregister() to clean up on unmount.
+```
+
+### `store.flushPendingMutations(options?)`
+
+Attempts to flush all pending (and optionally failed) outbox items. Returns a result describing what happened.
+
+```typescript
+const result = await store.flushPendingMutations({
+  includeFailed: true,
+  predicate: (item) => item.mutation !== "todos.delete",
+  mutations: [createTodo, updateTodo],
+});
+```
+
+<ResponseField name="flushed" type="string[]">
+  IDs of outbox items that flushed successfully.
+</ResponseField>
+
+<ResponseField name="failed" type="Array<{ id, mutation, error }>">
+  Items that threw during `flush`.
+</ResponseField>
+
+<ResponseField name="skipped" type="Array<{ id, mutation, reason }>">
+  Items skipped due to `"missing_definition"`, `"flushing"` (already in flight), or `"filtered"` (predicate returned false).
+</ResponseField>
+
+<ResponseField name="pending" type="number">
+  Count of outbox items still in `"pending"` status after this call.
+</ResponseField>
+
+### `store.flushMutation(definition, item)`
+
+Flushes a single outbox item directly. Useful for targeted retries.
+
+```typescript
+const [item] = store.getOutbox().filter((i) => i.id === targetId);
+await store.flushMutation(updateTodo, item);
+```
+
+### `store.getOutbox()`
+
+Returns all outbox items for the active scope.
+
+```typescript
+const pending = store.getOutbox().filter((i) => i.status === "pending");
+```
+
+## Subscriptions
+
+### `store.subscribe(listener)`
+
+Registers a listener that fires whenever in-memory state changes. Returns an unsubscribe function. All React hooks use this internally.
+
+```typescript
+const unsubscribe = store.subscribe(() => {
+  console.log("State changed:", store.getStatus());
+});
+
+// Clean up:
+unsubscribe();
+```
+
+### `store.emit()`
+
+Manually triggers all listeners. Useful if you modify state through a method that doesn't automatically notify subscribers.
+
+## Schema methods
+
+### `store.getSchema()`
+
+Returns the `SyncSchemaMetadata` passed at construction.
+
+### `store.getPersistedSchemaVersion()`
+
+Returns the schema version last written to IndexedDB, or `undefined` before `hydrate()` runs.
+
+### `store.getMeta<T>(key)`
+
+Returns a typed metadata value stored in IndexedDB. Metadata persists across page loads and is scoped to the active scope key.
+
+```typescript
+const lastFetchedAt = store.getMeta<number>("lastFetchedAt");
+```

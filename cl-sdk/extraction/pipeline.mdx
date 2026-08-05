@@ -1,0 +1,172 @@
+---
+title: "Extraction Pipeline for Insurance PDFs"
+sidebarTitle: "Pipeline"
+description: "Understand the 7-phase extraction pipeline that converts insurance PDFs into structured, source-backed operational profiles and compatibility documents."
+---
+
+The CL SDK extraction pipeline transforms raw insurance PDF content into a structured, evidence-backed representation of policy facts. It runs as a coordinated sequence of seven phases — from normalizing raw text spans to projecting compatibility output — so every extracted fact traces back to a specific location in the source document.
+
+## Pipeline Phases
+
+<Steps>
+  <Step title="Normalize Source Spans">
+    Merge Docling-derived and caller-provided spans, then normalize their text. This phase reconciles overlapping or duplicate spans from different parsers into a single, deduplicated span set.
+  </Step>
+  <Step title="Persist Source Evidence">
+    If a `sourceStore` is configured on the extractor, this phase saves the normalized spans and chunks before any extraction begins. Persisting evidence early means you retain raw source data even if a later phase fails.
+  </Step>
+  <Step title="Build the Source Tree">
+    `buildDocumentSourceTree()` converts the flat `SourceSpan[]` into a hierarchy of `DocumentSourceNode[]`. Each node carries one of the following kinds:
+
+    | Kind | Description |
+    |---|---|
+    | `document` | Root of the tree |
+    | `page_group` | Logical grouping of pages |
+    | `page` | Individual PDF page |
+    | `form` | Named policy form |
+    | `endorsement` | Endorsement form |
+    | `section` | Labeled section within a form |
+    | `schedule` | Schedule table or list |
+    | `clause` | Individual clause or condition |
+    | `table` | Tabular structure |
+    | `table_row` | Row within a table |
+    | `table_cell` | Cell within a table row |
+    | `text` | Freeform text block |
+  </Step>
+  <Step title="Group Source Structure">
+    Source nodes are grouped into declarations, policy forms, endorsements, sections, and schedules based on source text and parser-derived titles. Three hard constraints apply during grouping:
+
+    - **Don't invent IDs** — every node ID must derive from the source
+    - **Keep separately-numbered endorsements separate** — don't merge endorsements that carry distinct form numbers
+    - **Keep titles terse** — use the source heading text verbatim; don't rephrase
+  </Step>
+  <Step title="Extract the Operational Profile">
+    A single `generateObject` call with bounded evidence extracts the full `PolicyOperationalProfile`. Every extracted fact must cite either `sourceNodeIds` or `sourceSpanIds`. This phase produces:
+
+    - `policyTypes` as `linesOfBusiness` ACORD codes
+    - Policy number, named insured, insurer, and broker
+    - Effective and expiration dates
+    - Total premium
+    - Coverage units with structured limits
+    - Endorsement inventory and support flags
+  </Step>
+  <Step title="Clean Up Coverage Units">
+    An optional bounded cleanup pass reconciles coverage units — merging duplicate lines, filling missing fields, and resolving ambiguous references. You can control this pass via `modelCapabilitiesByTaskKind`.
+  </Step>
+  <Step title="Project Compatibility Output">
+    The final phase materializes the `document`, `documentMetadata`, and `documentOutline` views from the operational profile and source tree. These are backward-compatible projections that conform to the `InsuranceDocument` schema.
+  </Step>
+</Steps>
+
+## Quick Start
+
+The snippet below shows the minimal setup to run the extraction pipeline against a base64-encoded PDF:
+
+```typescript
+import { buildPageSourceSpans, createExtractor } from "@claritylabs/cl-sdk";
+
+const sourceSpans = buildPageSourceSpans([
+  { documentId: "doc-123", sourceKind: "policy_pdf", pageNumber: 1, text: pageOneText },
+]);
+
+const extractor = createExtractor({
+  generateObject: myGenerateObject,
+  onProgress: (msg) => console.log(msg),
+});
+
+const result = await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
+
+console.log(result.sourceTree?.length);            // canonical source hierarchy
+console.log(result.operationalProfile?.coverages); // source-backed coverage units
+console.log(result.document);                      // compatibility InsuranceDocument
+console.log(result.chunks.length);                 // 0 on v3 source-tree paths
+```
+
+<Note>
+  PDF inputs require `ExtractOptions.sourceSpans`. You must parse the PDF with LiteParse, Docling, PDF.js, OCR, or another parser before calling `extractor.extract`. The pipeline does not perform its own PDF rendering.
+</Note>
+
+### Docling Input
+
+If you parsed your document with Docling, pass the JSON document object directly instead of a base64 string:
+
+```typescript
+const result = await extractor.extract(
+  {
+    kind: "docling_document",
+    document: doclingDocumentJson,
+    sourceKind: "policy_pdf",
+  },
+  "doc-123"
+);
+```
+
+## Extractor Configuration
+
+Create an extractor with `createExtractor`, passing an `ExtractorConfig` object. Only `generateObject` is required; all other fields are optional.
+
+```typescript
+interface ExtractorConfig {
+  generateObject: GenerateObject;   // Required — your AI provider wrapper
+  onTokenUsage?: (usage: TokenUsage) => void;
+  onProgress?: (message: string) => void;
+  log?: LogFn;
+  providerOptions?: Record<string, unknown>;
+  sourceStore?: SourceStore;
+  qualityGate?: "off" | "warn" | "strict";
+  modelCapabilities?: ModelCapabilities;
+  modelCapabilitiesByTaskKind?: Partial<Record<ModelTaskKind, ModelCapabilities>>;
+  modelBudgetConstraints?: Partial<Record<ModelTaskKind, ModelBudgetConstraint>>;
+}
+```
+
+<ParamField path="generateObject" type="GenerateObject" required>
+  Your AI provider wrapper. The pipeline calls this function for each structured generation step.
+</ParamField>
+
+<ParamField path="onTokenUsage" type="(usage: TokenUsage) => void">
+  Called after each model call with incremental token counts. Use this for real-time cost tracking.
+</ParamField>
+
+<ParamField path="onProgress" type="(message: string) => void">
+  Receives human-readable status messages as the pipeline advances through phases. Useful for streaming progress to a UI.
+</ParamField>
+
+<ParamField path="sourceStore" type="SourceStore">
+  If provided, the pipeline persists source spans and chunks in phase 2 before extraction begins.
+</ParamField>
+
+<ParamField path="qualityGate" type='"off" | "warn" | "strict"'>
+  Controls how the pipeline responds to low-confidence extractions. `"strict"` throws on quality failures; `"warn"` logs them; `"off"` suppresses all quality checks.
+</ParamField>
+
+<ParamField path="modelCapabilitiesByTaskKind" type="Partial<Record<ModelTaskKind, ModelCapabilities>>">
+  Override model capabilities per pipeline task. Use this to allocate larger output budgets to specific phases.
+</ParamField>
+
+### Model Routing Example
+
+Route different token budgets to the operational profile extraction and the optional coverage cleanup pass:
+
+```typescript
+const extractor = createExtractor({
+  generateObject,
+  modelCapabilitiesByTaskKind: {
+    extraction_operational_profile: { maxOutputTokens: 16000 },
+    extraction_coverage_cleanup:    { maxOutputTokens: 8000 },
+  },
+});
+```
+
+## Progress Messages
+
+When you supply `onProgress`, the pipeline emits the following messages at key phase boundaries:
+
+| Message | Phase |
+|---|---|
+| `"Building source-native document tree..."` | Phase 3 — source tree construction begins |
+| `"Source-tree extraction complete."` | Phase 7 — compatibility projection finished |
+
+<Tip>
+  Forward `onProgress` messages to your application's job-status API so users see live feedback during long extractions on complex multi-form policies.
+</Tip>

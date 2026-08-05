@@ -1,0 +1,178 @@
+---
+title: "Storage Interfaces for Documents and Memory"
+sidebarTitle: "Overview"
+description: "CL SDK defines provider-agnostic storage interfaces for documents, vector memory, and source spans. Implement them against your own database."
+---
+
+CL SDK separates business logic from persistence entirely. Every agent and pipeline depends on storage interfaces — not concrete implementations. You wire in whatever database fits your infrastructure: Postgres with pgvector, Pinecone, Convex, Supabase, or any other store that can implement the interface contracts. CL SDK ships a SQLite reference implementation for local development and testing.
+
+## DocumentStore
+
+`DocumentStore` persists fully extracted `InsuranceDocument` records — policies and quotes — and supports querying by carrier, insured name, policy number, and quote number.
+
+```typescript
+interface DocumentStore {
+  save(doc: InsuranceDocument): Promise<void>;
+  get(id: string): Promise<InsuranceDocument | null>;
+  query(filters: DocumentFilters): Promise<InsuranceDocument[]>;
+  delete(id: string): Promise<void>;
+}
+
+interface DocumentFilters {
+  type?: "policy" | "quote";
+  carrier?: string;
+  insuredName?: string;
+  policyNumber?: string;
+  quoteNumber?: string;
+}
+```
+
+The query agent reads from `DocumentStore` to resolve document references in user messages. The extractor writes to it after a successful extraction.
+
+## MemoryStore
+
+`MemoryStore` handles two things: chunked document content for vector search, and conversation history for cross-session continuity. Both are optional but unlock the query agent's most useful capabilities.
+
+```typescript
+interface MemoryStore {
+  addChunks(chunks: DocumentChunk[]): Promise<void>;
+  search(
+    query: string,
+    options?: { limit?: number; filter?: ChunkFilter },
+  ): Promise<DocumentChunk[]>;
+  addTurn(turn: ConversationTurn): Promise<void>;
+  getHistory(
+    conversationId: string,
+    options?: { limit?: number },
+  ): Promise<ConversationTurn[]>;
+  searchHistory(
+    query: string,
+    conversationId?: string,
+  ): Promise<ConversationTurn[]>;
+}
+```
+
+`addChunks` accepts `DocumentChunk[]` objects produced by your chunking pipeline. `search` returns the top-k most relevant chunks for an embedding query. `addTurn` and `getHistory` manage per-conversation message history, while `searchHistory` supports semantic search across past turns.
+
+## SourceStore
+
+`SourceStore` extends `SourceRetriever` and is the persistence layer for your source grounding evidence. It stores both raw `SourceSpan` objects and the larger `SourceChunk` retrieval windows derived from them.
+
+```typescript
+interface SourceStore extends SourceRetriever {
+  addSourceSpans(spans: SourceSpan[]): Promise<void>;
+  addSourceChunks(chunks: SourceChunk[]): Promise<void>;
+  getSourceSpan(id: string): Promise<SourceSpan | null>;
+  getSourceSpansByDocument(documentId: string): Promise<SourceSpan[]>;
+  getSourceChunksByDocument(documentId: string): Promise<SourceChunk[]>;
+  deleteDocumentSource(documentId: string): Promise<void>;
+}
+```
+
+Because `SourceStore` implements `SourceRetriever`, you can pass any `SourceStore` instance directly to agents and pipelines via the `sourceRetriever` config option.
+
+## SQLite Reference Implementation
+
+The `createSqliteStore` factory returns a single store object that satisfies `DocumentStore`, `MemoryStore`, and `SourceStore`. It uses SQLite with a local vector similarity index for development and testing.
+
+```typescript
+import { createSqliteStore } from "@claritylabs/cl-sdk";
+
+const store = createSqliteStore({
+  path: "./data/store.db",
+  embed: async (text) => {
+    return await myEmbeddingProvider.embed(text);
+  },
+});
+
+// Separate interface handles for each concern
+const { documents, memory, source } = store;
+
+// Clean up connections when done
+store.close();
+```
+
+<Warning>
+  SQLite is a reference implementation for development and testing only. For production, implement the interfaces against a database that supports concurrent access and durable vector search — Postgres with pgvector, Pinecone, Convex, or a similar store.
+</Warning>
+
+## Application and PCE Stores
+
+Two additional interfaces support stateful multi-step workflows.
+
+**`ApplicationStore`** persists application pipeline state across multiple email or chat rounds. It stores the current batch of open questions, the insured's answers so far, and any context writes produced by the pipeline.
+
+**`BackfillProvider`** allows the application pipeline to pre-populate answers from prior submissions, existing policies, or external CRM data. Implement this interface to prevent asking the same questions on renewal.
+
+Both interfaces are optional — the application pipeline degrades gracefully without them, treating every session as a fresh start.
+
+## Data Flow
+
+The diagram below shows how data moves through CL SDK's storage layer across a typical extraction and query session.
+
+```
+PDF / Email input
+      │
+      ▼
+  Extractor
+      │
+      ├──▶ DocumentStore.save()    (full InsuranceDocument)
+      ├──▶ MemoryStore.addChunks() (chunked text for vector search)
+      └──▶ SourceStore.addSourceSpans() + addSourceChunks()
+
+User query
+      │
+      ▼
+  Query Agent
+      │
+      ├── DocumentStore.query()     (resolve document references)
+      ├── MemoryStore.search()      (find relevant chunks)
+      ├── SourceStore.searchSourceSpans()  (fetch quoted evidence)
+      └── MemoryStore.getHistory()  (conversation continuity)
+
+Application pipeline
+      │
+      ├── ApplicationStore  (question batches, answers, state)
+      └── BackfillProvider  (prior answers, renewal data)
+
+PCE / Case workflows
+      └── SourceRetriever.searchSourceSpans()  (quoted change evidence)
+```
+
+## Implementing Your Own Store
+
+Any class that satisfies the interface signatures works. Here is a minimal `DocumentStore` backed by a Postgres table:
+
+```typescript
+import type { DocumentStore, InsuranceDocument, DocumentFilters } from "@claritylabs/cl-sdk";
+import { sql } from "your-postgres-client";
+
+class PgDocumentStore implements DocumentStore {
+  async save(doc: InsuranceDocument): Promise<void> {
+    await sql`
+      INSERT INTO insurance_documents (id, type, data)
+      VALUES (${doc.id}, ${doc.type}, ${JSON.stringify(doc)})
+      ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data
+    `;
+  }
+
+  async get(id: string): Promise<InsuranceDocument | null> {
+    const [row] = await sql`SELECT data FROM insurance_documents WHERE id = ${id}`;
+    return row ? (row.data as InsuranceDocument) : null;
+  }
+
+  async query(filters: DocumentFilters): Promise<InsuranceDocument[]> {
+    // Build dynamic WHERE clause from filters
+    const rows = await sql`SELECT data FROM insurance_documents WHERE type = ${filters.type ?? null}`;
+    return rows.map((r) => r.data as InsuranceDocument);
+  }
+
+  async delete(id: string): Promise<void> {
+    await sql`DELETE FROM insurance_documents WHERE id = ${id}`;
+  }
+}
+```
+
+<Tip>
+  Start with `MemorySourceStore` and `MemoryDocumentStore` to get extraction and querying working end-to-end. Once your pipeline is stable, swap in your production stores by replacing the config option — no other code changes required.
+</Tip>

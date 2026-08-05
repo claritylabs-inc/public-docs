@@ -1,0 +1,130 @@
+---
+title: "Build Your First Durable Pipeline in Minutes"
+sidebarTitle: "Quickstart"
+description: "Install cl-pipelines, define two phases, wire up in-memory adapters, and run a crash-safe pipeline end-to-end in under five minutes."
+---
+
+This guide walks you through the complete lifecycle of a `cl-pipelines` job: installing the package, defining phases, connecting adapters, and confirming the run completed. You'll use the built-in in-memory adapters so there's nothing extra to configure — swap them for real adapters (like [Convex](/cl-pipelines/adapters/convex)) when you're ready for production.
+
+<Steps>
+
+### Install the package
+
+Install `@claritylabs/cl-pipelines` and its peer dependency `zod`:
+
+```bash
+npm install @claritylabs/cl-pipelines zod
+```
+
+<Note>
+  If you plan to use the agent loop (`runAgent`), also install the Vercel AI SDK: `npm install ai`
+</Note>
+
+### Define your phases
+
+A phase is a plain object with a `name` string and a `run` function. The `run` function receives a typed context and must return a `PhaseResult`. Define two phases — one that increments a counter and one that logs the final value:
+
+```typescript
+import type { Phase } from "@claritylabs/cl-pipelines";
+
+type CounterState = { count: number };
+
+const countUp: Phase<CounterState> = {
+  name: "countUp",
+  run: async (ctx) => {
+    const { count } = ctx.checkpoint.state;
+    await ctx.log(`count is ${count}`);
+    return { kind: "next", nextPhase: "logDone", state: { count: count + 1 } };
+  },
+};
+
+const logDone: Phase<CounterState> = {
+  name: "logDone",
+  run: async (ctx) => {
+    await ctx.log(`pipeline finished with count = ${ctx.checkpoint.state.count}`);
+    return { kind: "done" };
+  },
+};
+```
+
+Each phase returns either `{ kind: "next", nextPhase, state }` to advance, or `{ kind: "done" }` to mark the pipeline complete.
+
+### Wire up adapters
+
+`cl-pipelines` talks to your infrastructure through two small interfaces: a `StorageAdapter` (for persisting job state) and a `SchedulerAdapter` (for triggering the next phase). For local development and tests, the library ships in-memory implementations of both:
+
+```typescript
+import {
+  createMemoryStorage,
+  createMemoryScheduler,
+  advancePhase,
+} from "@claritylabs/cl-pipelines";
+
+const storage = createMemoryStorage<CounterState>();
+const scheduler = createMemoryScheduler();
+
+// Tell the in-memory scheduler what to do when it fires
+scheduler._bind((jobId) =>
+  advancePhase({ jobId, phases: [countUp, logDone], storage, scheduler })
+);
+```
+
+<Note>
+  `scheduler._bind()` is a test-only hook. In production your scheduler (e.g. Convex) calls `advancePhase` directly from its own action handler.
+</Note>
+
+### Run the pipeline
+
+Call `runPipeline` to seed the job. It writes the initial checkpoint and enqueues the first phase advance — it does **not** execute any phase directly. Then call `scheduler.drain()` to flush all pending advances synchronously:
+
+```typescript
+import { runPipeline } from "@claritylabs/cl-pipelines";
+
+await runPipeline({
+  jobId: "my-first-job",
+  phases: [countUp, logDone],
+  storage,
+  scheduler,
+  initialState: { count: 0 },
+});
+
+await scheduler.drain();
+
+const jobs = storage._inspect();
+console.log(jobs.get("my-first-job")!.status); // "complete"
+```
+
+### Verify the result
+
+After `scheduler.drain()` resolves, every phase has run to completion. Use `storage._inspect()` (test-only) to read the final job record:
+
+```typescript
+const job = jobs.get("my-first-job")!;
+
+console.log(job.status);      // "complete"
+console.log(job.checkpoint);  // null — cleared when done
+console.log(job.log);         // array of LogEntry from ctx.log(...)
+```
+
+<Tip>
+  Both `storage._inspect()` and `scheduler._bind()` are prefixed with `_` to signal they are test/development helpers. Your production `StorageAdapter` exposes the same public methods without those helpers.
+</Tip>
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book-open" href="/cl-pipelines/concepts">
+    Understand phases, checkpoints, retry modes, and adapters in depth.
+  </Card>
+  <Card title="Phases" icon="list-check" href="/cl-pipelines/phase-runner/phases">
+    Learn mid-phase checkpointing with ctx.saveState for large workloads.
+  </Card>
+  <Card title="Convex Adapter" icon="database" href="/cl-pipelines/adapters/convex">
+    Connect cl-pipelines to a real durable backend with Convex.
+  </Card>
+  <Card title="Agent Loop" icon="robot" href="/cl-pipelines/agent/overview">
+    Add a crash-safe LLM agent loop to your pipeline.
+  </Card>
+</CardGroup>

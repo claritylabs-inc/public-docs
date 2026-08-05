@@ -1,0 +1,306 @@
+---
+title: "CL SDK API Reference: Core Functions"
+sidebarTitle: "API Reference"
+description: "Complete reference for all CL SDK factory functions, source grounding builders, storage factories, agent prompts, PCE helpers, and PDF operations."
+---
+
+This page documents every public factory function and utility exported from `@claritylabs/cl-sdk`. For type definitions, see the [Types Reference](/cl-sdk/reference/types). For storage interface contracts, see the [Storage Overview](/cl-sdk/storage/overview).
+
+---
+
+## Extraction
+
+### `createExtractor(config)`
+
+Returns an extractor instance with a single `extract` method. The extractor uses your `generateObject` callback and optional `sourceStore` to produce grounded `ExtractionResult` objects.
+
+```typescript
+const extractor = createExtractor({
+  generateObject,         // required — your LLM provider callback
+  sourceStore,            // optional — persists and retrieves source spans
+  concurrency,            // optional — parallel extraction concurrency (default: 3)
+  onTokenUsage,           // optional — token usage reporting callback
+  onProgress,             // optional — progress reporting callback
+});
+
+const result = await extractor.extract(input, documentId?, options?);
+```
+
+**`input`** accepts:
+
+- `string` — base64-encoded PDF
+- `URL` — publicly accessible PDF URL
+- `Uint8Array` — raw PDF bytes
+- `{ fileId: string }` — provider file ID (e.g. Anthropic Files API)
+- `{ kind: "docling_document", document: DoclingDocument, sourceKind?: string }` — pre-parsed Docling document
+
+**`options`** (`ExtractOptions`):
+
+<ParamField body="sourceSpans" type="SourceSpan[]">
+  Pre-built source spans to use instead of extracting them from the PDF. When provided, the extractor skips its internal span builder.
+</ParamField>
+
+<ParamField body="coverageRecovery.enabled" type="boolean" default="false">
+  Enables a second-pass recovery step that attempts to fill gaps in coverage extraction using broader source windows.
+</ParamField>
+
+<ParamField body="documentId" type="string">
+  Stable identifier for this document. Used as the `documentId` on all generated source spans.
+</ParamField>
+
+---
+
+## Query Agent
+
+### `createQueryAgent(config)`
+
+Returns a query agent that answers natural language questions about insurance documents using grounded retrieval.
+
+```typescript
+const agent = createQueryAgent({
+  generateText,           // required
+  generateObject,         // required
+  documentStore,          // required
+  memoryStore,            // required
+  sourceRetriever,        // optional — defaults to memoryStore
+  concurrency,            // optional
+  maxVerifyRounds,        // optional — re-verification iterations (default: 2)
+  retrievalLimit,         // optional — spans per retrieval call (default: 5)
+  onTokenUsage,           // optional
+  onProgress,             // optional
+});
+
+const output: QueryOutput = await agent.query({
+  question: "What is the general liability per occurrence limit?",
+  conversationId: "conv-123",
+  documentIds: ["policy-abc"],
+});
+```
+
+---
+
+## Application Pipeline
+
+### `createApplicationPipeline(config)`
+
+Returns a stateful pipeline for multi-round insurance application intake over email or chat.
+
+```typescript
+const pipeline = createApplicationPipeline({
+  generateObject,
+  generateText,
+  documentStore,
+  applicationStore,      // optional
+  backfillProvider,      // optional
+  onTokenUsage,
+});
+```
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `processApplication(input)` | Process initial application submission |
+| `processReply(reply)` | Process insured's reply to a question batch |
+| `generateCurrentBatchEmail(state)` | Render the current open questions as an email body |
+| `getConfirmationSummary(state)` | Generate a human-readable summary of collected answers |
+| `planNextQuestions(state)` | Determine which questions to ask in the next batch |
+| `proposeContextWrites(state)` | Suggest structured context updates from free-text answers |
+| `buildApplicationPacket(state)` | Assemble the final submission-ready application packet |
+
+---
+
+## PCE Agent
+
+### `createPceAgent(config)`
+
+Returns a Policy Change Endorsement agent that processes change requests and produces submission packets with grounded evidence.
+
+```typescript
+const agent = createPceAgent({
+  generateObject,         // required
+  sourceRetriever,        // required
+  executionMode,          // optional — "auto" | "deterministic_tree" | "market_eval" | "hybrid"
+  retrievalLimit,         // optional
+  onTokenUsage,
+  onProgress,
+});
+
+const state = await agent.processChangeRequest({
+  request: "Add additional insured for ABC Corp on CGL policy.",
+  documentIds: ["policy-abc"],
+});
+
+const packet = await agent.generateSubmissionPacket(state);
+```
+
+<ParamField body="executionMode" type="string" default="auto">
+  Controls PCE planning strategy. `"auto"` selects the best mode based on request complexity. `"deterministic_tree"` follows a fixed decision tree. `"market_eval"` evaluates multiple carrier interpretations. `"hybrid"` combines tree and eval passes.
+</ParamField>
+
+---
+
+## Source Grounding Builders
+
+### `buildPageSourceSpans(pages)`
+
+Builds one `SourceSpan` per page from an array of page input objects. The best default for most PDF documents.
+
+```typescript
+const spans = buildPageSourceSpans([
+  { documentId, pageNumber, text, sourceKind?, sectionId?, formNumber?, metadata? },
+]);
+```
+
+### `buildSectionSourceSpans(pages, options?)`
+
+Splits page text at insurance heading boundaries to produce finer-grained section spans.
+
+```typescript
+const spans = buildSectionSourceSpans(pages, { minSectionChars: 120 });
+```
+
+### `buildTextSourceSpans(input, options?)`
+
+Builds overlapping text spans from long free-text sources (emails, notes, HTML).
+
+```typescript
+const spans = buildTextSourceSpans(
+  { documentId, sourceKind, text },
+  { maxChars: 4000, overlapChars: 250 },
+);
+```
+
+### `chunkSourceSpans(spans, options?)`
+
+Combines spans into larger retrieval chunks respecting span boundaries.
+
+```typescript
+const chunks = chunkSourceSpans(spans, { maxChars: 6000 });
+```
+
+### `orderSourceEvidence(evidence[])`
+
+Deduplicates and sorts a mixed array of retrieval results by descending relevance, then stable source identifier.
+
+```typescript
+const ordered = orderSourceEvidence([...vectorResults, ...structuredResults]);
+```
+
+---
+
+## Storage
+
+### `createSqliteStore({ path, embed })`
+
+Creates a local SQLite-backed store for development and testing.
+
+```typescript
+const store = createSqliteStore({
+  path: "./data/store.db",
+  embed: async (text: string) => number[],
+});
+
+// store.documents  → DocumentStore
+// store.memory     → MemoryStore
+// store.source     → SourceStore
+// store.close()    → void
+```
+
+---
+
+## Agent Prompts
+
+### `buildAgentSystemPrompt(ctx)`
+
+Composes a full insurance agent system prompt from the provided `AgentContext`. Returns a plain string.
+
+```typescript
+const system = buildAgentSystemPrompt(ctx);
+```
+
+### `buildClassifyMessagePrompt(platform)`
+
+Returns a system prompt for classifying inbound messages by intent, document references, and request type.
+
+```typescript
+const classifierSystem = buildClassifyMessagePrompt("email");
+```
+
+---
+
+## PCE Helpers
+
+### `buildPceSubmissionPacket(state, createdAt)`
+
+Assembles a `PceSubmissionPacket` from a completed PCE agent state and a creation timestamp.
+
+### `collectPceEvidenceSources(input, config?)`
+
+Collects all `PceEvidenceSource` objects relevant to a change request from the configured source retriever.
+
+### `validatePceItems(items, sources)`
+
+Validates a list of `PolicyChangeItem` objects against their evidence sources. Returns `CaseValidationIssue[]` for any items with insufficient or contradictory evidence.
+
+### `selectPceExecutionMode(params)`
+
+Heuristically selects the best `PceExecutionMode` for a given change request based on complexity signals.
+
+### `buildPceQualityReport(state)`
+
+Produces a `PceQualityReport` summarizing evidence coverage, validation issues, and confidence scores across all change items in a PCE state.
+
+### `stablePolicyChangeItemId(item)`
+
+Derives a stable, deterministic ID for a `PolicyChangeItem` based on its content. Identical items across submissions produce the same ID.
+
+---
+
+## Case Workflow Helpers
+
+### `validateQuotedEvidence(params)`
+
+Validates that quoted evidence in a case proposal matches the referenced source spans. Returns `CaseValidationIssue[]`.
+
+### `evaluateCaseProposals(proposals)`
+
+Scores and ranks an array of `CaseProposal` objects by evidence strength, returning them in descending order of confidence.
+
+### `stableCaseId(prefix, parts)`
+
+Derives a stable, deterministic case ID from a prefix and an array of content parts.
+
+---
+
+## PDF Operations
+
+These utilities handle low-level PDF manipulation without requiring a server-side PDF renderer.
+
+| Function | Description |
+|----------|-------------|
+| `getAcroFormFields(pdf)` | Returns all AcroForm field names and types in a PDF |
+| `fillAcroForm(pdf, mapping)` | Fills named AcroForm fields and returns the modified PDF bytes |
+| `overlayTextOnPdf(pdf, overlays)` | Renders text overlays at specified page coordinates |
+| `extractPageRange(pdf, start, end)` | Extracts a page range as a new PDF |
+| `getPdfPageCount(pdf)` | Returns the total page count |
+| `pdfInputToBytes(input)` | Normalizes any `PdfInput` variant to `Uint8Array` |
+| `pdfInputToBase64(input)` | Normalizes any `PdfInput` variant to a base64 string |
+
+```typescript
+import {
+  getAcroFormFields,
+  fillAcroForm,
+  overlayTextOnPdf,
+  extractPageRange,
+  getPdfPageCount,
+  pdfInputToBytes,
+  pdfInputToBase64,
+} from "@claritylabs/cl-sdk";
+
+const fields = await getAcroFormFields(pdfBytes);
+const filled = await fillAcroForm(pdfBytes, {
+  "PolicyNumber": "GL-2024-001",
+  "EffectiveDate": "01/01/2024",
+});
+```
