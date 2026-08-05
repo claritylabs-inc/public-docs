@@ -1,15 +1,52 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "Clarity Labs SDKs",
+  "name": "Clarity Labs Developer Docs",
+  "description": "Open-source TypeScript SDKs for regulated AI agents, local-first sync, and durable workflow execution.",
   "theme": "luma",
   "colors": {
-    "primary": "#5B6AF0",
-    "light": "#7C88F5",
-    "dark": "#3D4EE8"
+    "primary": "#000000",
+    "light": "#A0D2FA",
+    "dark": "#737373"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://claritylabs.inc"
+  },
+  "favicon": "/logo/mark.svg",
+  "appearance": {
+    "default": "system"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Geist",
+      "weight": 600
+    },
+    "body": {
+      "family": "Geist",
+      "weight": 400
+    }
+  },
+  "background": {
+    "color": {
+      "light": "#FFFFFF",
+      "dark": "#000000"
+    }
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs",
+    "codeblocks": "system"
   },
   "navbar": {
+    "links": [
+      {
+        "label": "Clarity Labs",
+        "href": "https://claritylabs.inc"
+      }
+    ],
     "primary": {
-      "type": "github",
+      "type": "button",
+      "label": "GitHub",
       "href": "https://github.com/claritylabs-inc"
     }
   },
@@ -38,10 +75,7 @@
           },
           {
             "group": "Query Agent",
-            "pages": [
-              "cl-sdk/query/pipeline",
-              "cl-sdk/query/citations"
-            ]
+            "pages": ["cl-sdk/query/pipeline", "cl-sdk/query/citations"]
           },
           {
             "group": "Workflows",
@@ -80,11 +114,7 @@
         "groups": [
           {
             "group": "Get Started",
-            "pages": [
-              "cl-sync/index",
-              "cl-sync/quickstart",
-              "cl-sync/concepts"
-            ]
+            "pages": ["cl-sync/index", "cl-sync/quickstart", "cl-sync/concepts"]
           },
           {
             "group": "Core",
@@ -97,17 +127,11 @@
           },
           {
             "group": "React",
-            "pages": [
-              "cl-sync/react/provider",
-              "cl-sync/react/hooks"
-            ]
+            "pages": ["cl-sync/react/provider", "cl-sync/react/hooks"]
           },
           {
             "group": "Integrations",
-            "pages": [
-              "cl-sync/convex-adapter",
-              "cl-sync/reference"
-            ]
+            "pages": ["cl-sync/convex-adapter", "cl-sync/reference"]
           }
         ]
       },
@@ -133,10 +157,7 @@
           },
           {
             "group": "Agent Loop",
-            "pages": [
-              "cl-pipelines/agent/overview",
-              "cl-pipelines/agent/tools"
-            ]
+            "pages": ["cl-pipelines/agent/overview", "cl-pipelines/agent/tools"]
           },
           {
             "group": "Adapters & UI",
@@ -149,9 +170,7 @@
           },
           {
             "group": "Reference",
-            "pages": [
-              "cl-pipelines/reference"
-            ]
+            "pages": ["cl-pipelines/reference"]
           }
         ]
       }
