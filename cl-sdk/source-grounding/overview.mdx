@@ -9,16 +9,16 @@ Source grounding gives every CL SDK workflow a stable, verifiable evidence found
 ## Core Objects
 
 <CardGroup cols={2}>
-  <Card title="SourceSpan" icon="text-size">
+  <Card title="SourceSpan" icon="type">
     The smallest addressable source unit. Stores source kind, text, page range, optional section and form metadata, a stable hash, and optional bounding boxes.
   </Card>
-  <Card title="DocumentSourceNode" icon="sitemap">
+  <Card title="DocumentSourceNode" icon="network">
     The canonical retrieval and hierarchy unit. Groups spans into typed nodes: document, page_group, form, endorsement, section, schedule, clause, table, row, cell, and text.
   </Card>
   <Card title="PolicyOperationalProfile" icon="shield-check">
     A source-backed projection of product-critical facts — limits, retentions, lines of business, and effective dates — each tied to a quoted span.
   </Card>
-  <Card title="SourceChunk" icon="puzzle-piece">
+  <Card title="SourceChunk" icon="puzzle">
     A compatibility retrieval window used for vector search and RAG pipelines. Produced by chunking spans with configurable overlap.
   </Card>
 </CardGroup>
@@ -107,10 +107,10 @@ Following these rules keeps your evidence layer trustworthy across every workflo
 ## What Connects Here
 
 <CardGroup cols={2}>
-  <Card title="Source Spans" icon="layer-group" href="/cl-sdk/source-grounding/source-spans">
+  <Card title="Source Spans" icon="layers" href="/cl-sdk/source-grounding/source-spans">
     Learn how to build and structure SourceSpan objects from PDF pages, sections, tables, and free text.
   </Card>
-  <Card title="Retrieval" icon="magnifying-glass" href="/cl-sdk/source-grounding/retrieval">
+  <Card title="Retrieval" icon="search" href="/cl-sdk/source-grounding/retrieval">
     Search spans and nodes using SourceRetriever with configurable retrieval modes.
   </Card>
   <Card title="Storage Overview" icon="database" href="/cl-sdk/storage/overview">

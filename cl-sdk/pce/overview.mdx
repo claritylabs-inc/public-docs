@@ -14,19 +14,19 @@ PCE workflows are designed to assist licensed users, not replace their review. T
   <Card title="Change Parsing" icon="list-check">
     Parse a free-text request into typed `PolicyChangeItem[]` with field paths, proposed values, action types, and source citations.
   </Card>
-  <Card title="Evidence Retrieval" icon="magnifying-glass">
+  <Card title="Evidence Retrieval" icon="search">
     Retrieve policy and conversation evidence through a `SourceRetriever` to ground each change item in real document text.
   </Card>
-  <Card title="Missing Info Detection" icon="circle-question">
+  <Card title="Missing Info Detection" icon="circle-question-mark">
     Automatically identify required fields that aren't present and surface targeted questions for the requesting user.
   </Card>
-  <Card title="Impact Summary" icon="chart-bar">
+  <Card title="Impact Summary" icon="chart-no-axes-column">
     Build a human-readable policy impact summary covering coverage changes, premium implications, and underwriting flags.
   </Card>
-  <Card title="Execution Mode Selection" icon="sliders">
+  <Card title="Execution Mode Selection" icon="sliders-horizontal">
     Choose between `deterministic_tree`, `market_eval`, or `hybrid` — or let the SDK pick based on case complexity.
   </Card>
-  <Card title="Submission Artifacts" icon="file-export">
+  <Card title="Submission Artifacts" icon="file-up">
     Generate carrier-ready submission packets with citations, a validation report, email drafts, and an underwriter summary.
   </Card>
 </CardGroup>
@@ -135,10 +135,10 @@ After `processChangeRequest()` resolves, the returned `state` object carries eve
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Workflow Phases" href="/cl-sdk/pce/workflow" icon="diagram-project">
+  <Card title="Workflow Phases" href="/cl-sdk/pce/workflow" icon="workflow">
     Explore each phase of the PCE state machine, execution modes, and standalone helper functions.
   </Card>
-  <Card title="Submission Packets" href="/cl-sdk/pce/submission-packet" icon="paper-plane">
+  <Card title="Submission Packets" href="/cl-sdk/pce/submission-packet" icon="send">
     Learn how to generate carrier-ready packets, run quality reports, and review artifacts before submission.
   </Card>
 </CardGroup>
