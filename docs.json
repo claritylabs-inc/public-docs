@@ -103,8 +103,7 @@
             "pages": [
               "cl-sdk/reference/api",
               "cl-sdk/reference/types",
-              "cl-sdk/reference/policy-taxonomy",
-              "cl-sdk/mcp-server"
+              "cl-sdk/reference/policy-taxonomy"
             ]
           }
         ]
