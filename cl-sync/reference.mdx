@@ -79,6 +79,7 @@ interface SyncRecord {
 ```typescript
 interface SyncStoreConfig {
   scope: SyncScope;
+  schemaVersion?: number;
   schema?: SyncSchemaMetadata;
   migrations?: readonly SyncMigration[];
   mutations?: readonly MutationDefinition<any, any>[];
@@ -177,9 +178,9 @@ interface SyncMigration {
 <ResponseField name="FlushPendingMutationsOptions" type="interface">
 ```typescript
 interface FlushPendingMutationsOptions {
-  mutations?: MutationDefinition<any, any>[];
+  mutations?: readonly MutationDefinition<any, any>[];
   includeFailed?: boolean;
-  predicate?: (item: OutboxItem<unknown>) => boolean;
+  predicate?: (item: OutboxItem) => boolean;
 }
 ```
 </ResponseField>

@@ -27,7 +27,7 @@ const todosCollection = defineConvexCollection({
 ```
 
 <ParamField path="query" type="FunctionReference" required>
-  A Convex query function reference (e.g., `api.todos.list`). Passed directly to `convex.onUpdate` for real-time subscription.
+  A Convex query function reference (e.g., `api.todos.list`). Passed to `client.watchQuery(query, args)` to establish a real-time subscription.
 </ParamField>
 
 <ParamField path="mapSnapshot" type="(result: TQuery) => TRecord[]">

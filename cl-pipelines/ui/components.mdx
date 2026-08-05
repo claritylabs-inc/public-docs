@@ -1,5 +1,5 @@
 ---
-title: "Pipeline UI Component Reference"
+title: "StatusBanner, ProgressLog, and RetryButtons Reference"
 sidebarTitle: "Components"
 description: "Full prop reference for StatusBanner, ProgressLog, and RetryButtons — the headless React components from @claritylabs/cl-pipelines/ui."
 ---
@@ -56,7 +56,7 @@ An inline element that marks the status visually. Renders a `<span data-indicato
 
 ### StatusBanner.Title
 
-The title line. Renders a `<p data-role="title">` with a default text string based on status:
+The title line. Renders a `<div data-role="title">` with a default text string based on status:
 
 | Status | Default text |
 |--------|-------------|
@@ -69,19 +69,19 @@ The title line. Renders a `<p data-role="title">` with a default text string bas
 </ParamField>
 
 <ParamField path="className" type="string">
-  Class name applied to the `<p>`.
+  Class name applied to the `<div>`.
 </ParamField>
 
 ### StatusBanner.Description
 
-A secondary text line. Renders a `<p data-role="description">` showing the `error` string from the parent `Root` by default.
+A secondary text line. Renders a `<div data-role="description">` showing the `error` string from the parent `Root` by default.
 
 <ParamField path="children" type="React.ReactNode">
   Override the default (error string) with any content.
 </ParamField>
 
 <ParamField path="className" type="string">
-  Class name applied to the `<p>`.
+  Class name applied to the `<div>`.
 </ParamField>
 
 ### StatusBanner.Actions

@@ -1,10 +1,10 @@
 ---
-title: "PCE Workflow Phases and Execution Modes"
+title: "PCE Workflow: State Machine Phases and Execution Modes"
 sidebarTitle: "Workflow"
-description: "Walk through all 7 phases of the PCE state machine, execution mode selection logic, and the standalone helper functions available for custom integrations."
+description: "Walk through the PCE state machine phases, execution mode selection logic, and standalone helpers available for custom integrations."
 ---
 
-The PCE agent runs a 7-phase state machine for every change request. Each phase has a clear responsibility and produces output consumed by the next. You can run the full pipeline through `pce.processChangeRequest()`, or call individual phase helpers directly when you need more control over a custom workflow.
+The PCE agent runs a 5-phase state machine for every change request, followed by packet generation and human review. Each phase has a clear responsibility and produces output consumed by the next. You can run the full pipeline through `pce.processChangeRequest()`, or call individual phase helpers directly when you need more control over a custom workflow.
 
 ## State Machine Phases
 

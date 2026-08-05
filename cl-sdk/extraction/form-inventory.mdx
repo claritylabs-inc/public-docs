@@ -1,5 +1,5 @@
 ---
-title: "Form Structure and Source Tree Organization"
+title: "Policy Form Structure and Source Tree Organization"
 sidebarTitle: "Form Structure"
 description: "Learn how the CL SDK source tree represents policy form structure and how to work with form inventory projections and coverage lines."
 ---
@@ -87,7 +87,7 @@ interface OperationalCoverageLine {
 ```
 
 <ResponseField name="limits" type="OperationalCoverageTerm[]">
-  Structured limit terms for this coverage line. Each term carries a `termKind` (e.g. `"each_claim"`, `"aggregate"`, `"retention"`) and a `value` string.
+  Structured limit terms for this coverage line. Each term carries a `kind` (e.g. `"each_claim_limit"`, `"aggregate_limit"`, `"retention"`) and a `value` string.
 </ResponseField>
 
 <ResponseField name="sourceNodeIds" type="string[]">
@@ -126,15 +126,12 @@ The following example collects all `endorsement` nodes from the source tree and 
 ```typescript
 import type { DocumentSourceNode } from "@claritylabs/cl-sdk";
 
-function collectEndorsements(nodes: DocumentSourceNode[]): DocumentSourceNode[] {
-  return nodes.flatMap((node) => {
-    const children = node.children ? collectEndorsements(node.children) : [];
-    return node.kind === "endorsement" ? [node, ...children] : children;
-  });
-}
-
 const result = await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
-const endorsements = collectEndorsements(result.sourceTree ?? []);
+
+// The source tree is a flat array — nodes relate via parentId, not nested children.
+const endorsements = (result.sourceTree ?? []).filter(
+  (node: DocumentSourceNode) => node.kind === "endorsement"
+);
 
 for (const node of endorsements) {
   console.log(node.id, node.title);

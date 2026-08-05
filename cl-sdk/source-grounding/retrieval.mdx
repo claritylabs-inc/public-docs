@@ -1,5 +1,5 @@
 ---
-title: "Source Retrieval: Searching Evidence Spans"
+title: "Source Retrieval: Searching Spans and Document Nodes"
 sidebarTitle: "Retrieval"
 description: "Search source spans and document nodes using SourceRetriever with configurable retrieval modes, filters, and deterministic result ordering."
 ---
@@ -20,6 +20,7 @@ interface SourceRetriever {
 interface SourceRetrievalQuery {
   question: string;
   documentIds?: string[];
+  chunkIds?: string[];
   limit?: number;
   mode?: "graph_only" | "source_rag" | "long_context" | "hybrid";
   filters?: Record<string, string>;

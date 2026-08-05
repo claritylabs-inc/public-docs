@@ -187,7 +187,7 @@ const result = await store.flushPendingMutations({
 </ResponseField>
 
 <ResponseField name="pending" type="number">
-  Count of outbox items still in `"pending"` status after this call.
+  Total count of all remaining outbox items (across `"pending"`, `"flushing"`, and `"failed"` statuses) after this call.
 </ResponseField>
 
 ### `store.flushMutation(definition, item)`

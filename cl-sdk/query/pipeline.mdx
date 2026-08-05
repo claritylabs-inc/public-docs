@@ -1,7 +1,7 @@
 ---
-title: "Citation-Backed Query Agent Pipeline"
+title: "Query Agent Pipeline: Citations and Grounded Answers"
 sidebarTitle: "Pipeline"
-description: "Understand the 7-phase query agent pipeline that answers insurance questions against stored documents with grounded, citation-backed responses."
+description: "Learn how the 6-phase query agent answers insurance questions against stored documents with grounded, citation-backed, verifiable responses."
 ---
 
 The query agent transforms natural-language questions into grounded, citation-backed answers by running your question through a structured multi-phase pipeline. Each phase builds on the previous one — from interpreting any attached files, through parallel retrieval and reasoning, to a final verified response with inline source references. You get a confidence score, follow-up suggestions, and a full token usage report alongside every answer.
@@ -65,7 +65,7 @@ const result = await agent.query({
 
 ## Pipeline Phases
 
-The query agent runs seven sequential phases for every question. Retrieval and reasoning phases run in parallel across sub-questions to keep latency low.
+The query agent runs six sequential phases for every question. Retrieval and reasoning phases run in parallel across sub-questions to keep latency low.
 
 <Steps>
   <Step title="Interpret Attachments">
@@ -78,11 +78,9 @@ The query agent runs seven sequential phases for every question. Retrieval and r
     **Supported intents:** `policy_question` · `coverage_comparison` · `document_search` · `claims_inquiry` · `general_knowledge`
   </Step>
 
-  <Step title="Plan Retrieval">
+  <Step title="Plan Retrieval and Retrieve">
     The planner checks whether a lookup is actually needed — for example, if the conversation history already contains a complete answer, retrieval can be skipped entirely. This keeps token usage low for follow-up questions.
-  </Step>
 
-  <Step title="Retrieve (Parallel)">
     When retrieval is needed, four strategies run in parallel up to the configured `concurrency` limit:
 
     - **Chunk search** — semantic similarity search across indexed document chunks

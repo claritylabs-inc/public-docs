@@ -1,5 +1,5 @@
 ---
-title: "Storage and Scheduler Adapter Interfaces"
+title: "StorageAdapter and SchedulerAdapter Interface Reference"
 sidebarTitle: "Overview"
 description: "Understand the StorageAdapter and SchedulerAdapter interfaces that connect cl-pipelines to your infrastructure, and use the in-memory adapters for testing."
 ---
@@ -41,7 +41,7 @@ type StorageAdapter<TState> = {
 </ResponseField>
 
 <ResponseField name="clearLog" type="(jobId: string) => Promise<void>">
-  Clears all log entries for a job. Called by the library when a job is reset via `retryMode: "full"`.
+  Clears all log entries for a job. The library exposes this method for consumers to call (for example, before a full retry), but does not call it automatically.
 </ResponseField>
 
 ## SchedulerAdapter

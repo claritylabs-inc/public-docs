@@ -16,6 +16,7 @@ interface ExtractionResult {
   sourceChunks: SourceChunk[];            // Retrieval windows from source spans
   sourceTree?: DocumentSourceNode[];      // Canonical source hierarchy
   operationalProfile?: PolicyOperationalProfile; // Source-backed product facts
+  coverageRecovery?: CoverageRecoveryDiagnostics; // Present when coverage recovery is enabled
   warnings?: string[];
   tokenUsage: TokenUsage;                 // { inputTokens, outputTokens }
   usageReporting: {
@@ -74,12 +75,12 @@ const { document } = result;
 if (document.type === "policy") {
   console.log(document.policyNumber);   // string
   console.log(document.effectiveDate);  // string
-  console.log(document.expirationDate); // string
+  console.log(document.expirationDate); // string | undefined
 } else {
-  console.log(document.quoteNumber);           // string
-  console.log(document.proposedEffectiveDate); // string
-  console.log(document.subjectivities);        // Subjectivity[]
-  console.log(document.underwritingConditions); // string[]
+  console.log(document.quoteNumber);            // string
+  console.log(document.proposedEffectiveDate);  // string | undefined
+  console.log(document.subjectivities);         // Subjectivity[] | undefined
+  console.log(document.underwritingConditions); // UnderwritingCondition[] | undefined
 }
 ```
 
@@ -106,16 +107,16 @@ Both `PolicyDocument` and `QuoteDocument` expose the following fields:
 |---|---|---|
 | `policyNumber` | `string` | Policy number as printed on the declarations page |
 | `effectiveDate` | `string` | Policy effective date |
-| `expirationDate` | `string` | Policy expiration date |
+| `expirationDate` | `string?` | Policy expiration date |
 
 ### QuoteDocument-Specific Fields
 
 | Field | Type | Description |
 |---|---|---|
 | `quoteNumber` | `string` | Quote or proposal number |
-| `proposedEffectiveDate` | `string` | Proposed effective date |
-| `subjectivities` | `Subjectivity[]` | Conditions required before binding |
-| `underwritingConditions` | `string[]` | Underwriting requirements |
+| `proposedEffectiveDate` | `string?` | Proposed effective date |
+| `subjectivities` | `Subjectivity[]?` | Conditions required before binding |
+| `underwritingConditions` | `UnderwritingCondition[]?` | Underwriting requirements |
 
 ## Persisting Results
 

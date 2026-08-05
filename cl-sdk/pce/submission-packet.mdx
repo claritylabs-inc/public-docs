@@ -1,7 +1,7 @@
 ---
-title: "Generating PCE Submission Packets for Carriers"
+title: "PCE Submission Packets: Generation and Quality Review"
 sidebarTitle: "Submission Packet"
-description: "Generate carrier-ready PCE submission packets, run quality gate checks, and work through the review checklist before handing off to a licensed professional."
+description: "Generate carrier-ready PCE submission packets, run quality gate checks, and complete the review checklist before handing off to a licensed reviewer."
 ---
 
 A `PceSubmissionPacket` bundles everything a licensed reviewer needs to assess a policy change request: the normalized change items, generated carrier artifacts, validation issues, missing-info questions, and a creation timestamp. You generate one after the PCE state machine has run to completion and all blocking issues are resolved.
@@ -92,29 +92,29 @@ import { buildPceQualityReport } from "@claritylabs/cl-sdk";
 const report = buildPceQualityReport(state);
 
 if (report.qualityGateStatus === "failed") {
-  // Keep the case in draft and surface blocking issues to the user.
-  console.log(report.blockingIssues);
+  // Keep the case in draft and surface blocking issue counts to the user.
+  console.log(`${report.blockingIssues} blocking issue(s), ${report.missingInfoCount} missing-info question(s)`);
 }
 ```
 
-<ResponseField name="qualityGateStatus" type='"passed" | "passed_with_warnings" | "failed"'>
-  Overall readiness signal. `"passed"` means no blocking issues and no missing-info questions. `"passed_with_warnings"` means warnings exist but the case can proceed to review. `"failed"` means blocking issues or missing info must be resolved first.
+<ResponseField name="qualityGateStatus" type='"passed" | "warning" | "failed"'>
+  Overall readiness signal. `"passed"` means no blocking issues and no missing-info questions. `"warning"` means warning-level issues exist but the case can proceed to review. `"failed"` means blocking issues or ungrounded existing values must be resolved first.
 </ResponseField>
 
-<ResponseField name="blockingIssues" type="CaseValidationIssue[]">
-  Subset of `validationIssues` with `severity === "blocking"`. Each issue includes an `itemId`, `fieldPath`, and human-readable `message`.
+<ResponseField name="blockingIssues" type="number">
+  Count of validation issues with `severity === "blocking"`. When this is greater than zero, `qualityGateStatus` will be `"failed"`.
 </ResponseField>
 
-<ResponseField name="warningIssues" type="CaseValidationIssue[]">
-  Issues with `severity === "warning"` that a reviewer should assess but that do not block submission.
+<ResponseField name="warningIssues" type="number">
+  Count of validation issues with `severity === "warning"`. Non-zero values set `qualityGateStatus` to `"warning"` when no blocking issues are present.
 </ResponseField>
 
 <ResponseField name="missingInfoCount" type="number">
-  Number of unresolved missing-info questions at report time.
+  Number of unresolved missing-info questions at report time. Non-zero values set `qualityGateStatus` to at least `"warning"`.
 </ResponseField>
 
-<ResponseField name="citationCoverage" type="number">
-  Fraction of change items that have at least one verified citation (0–1). Low coverage suggests the evidence retrieval step found limited supporting text.
+<ResponseField name="ungroundedExistingValueCount" type="number">
+  Number of change items whose `beforeValue` is set but have no source span IDs to back it up. These count as blocking issues and set `qualityGateStatus` to `"failed"`.
 </ResponseField>
 
 ---

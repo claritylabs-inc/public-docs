@@ -1,7 +1,7 @@
 ---
-title: "Case Workflow Primitives for Agent Flows"
+title: "Case Workflow Primitives: Evidence, Validation, and IDs"
 sidebarTitle: "Case Workflows"
-description: "Use shared case primitives — evidence, citations, validation, missing info, and submission artifacts — to build durable agent workflows beyond the built-in PCE pipeline."
+description: "Use shared case primitives — evidence, citations, validation, and missing info — to build durable agent workflows beyond the built-in PCE pipeline."
 ---
 
 Case workflow primitives are the shared building blocks that power the PCE agent and the application pipeline — but they're also exported directly so you can compose them into any durable agent flow you need. Whether you're building a claims intake agent, a COI request tracker, a renewal preparation workflow, or something entirely custom, these primitives give you grounded evidence, typed validation, structured missing-info questions, and submission artifacts without having to rebuild the scaffolding yourself.
@@ -83,23 +83,26 @@ if (issues.length > 0) {
 
 ## Proposal Scoring
 
-When your workflow generates multiple competing proposals for a case item — for example, different interpretations of an ambiguous request — use `evaluateCaseProposals()` to rank them before committing to one.
+When your workflow generates multiple competing proposals for a case item — for example, different interpretations of an ambiguous request — use `evaluateCaseProposals()` to select the best one before committing.
 
 ```typescript
 import { evaluateCaseProposals } from "@claritylabs/cl-sdk";
 
-const ranked = evaluateCaseProposals(proposals);
+const best = evaluateCaseProposals(proposals);
 
-// ranked[0] is the highest-scoring proposal.
-console.log(ranked[0].scores);
-// {
-//   grounding: 0.92,
-//   completeness: 0.88,
-//   consistency: 1.0,
-//   determinism: 0.75,
-//   risk: 0.6,
-//   cost: 0.8,
-// }
+// evaluateCaseProposals returns the single highest-scoring proposal, or undefined
+// if all proposals have blocking validation issues.
+if (best) {
+  console.log(best.score);
+  // {
+  //   grounding: 0.92,
+  //   completeness: 0.88,
+  //   consistency: 1.0,
+  //   determinism: 0.75,
+  //   risk: 0.6,
+  //   cost: 0.8,
+  // }
+}
 ```
 
 Proposals are scored on six dimensions:
@@ -114,7 +117,7 @@ Proposals are scored on six dimensions:
 | `cost` | Estimated token cost to execute the proposal |
 
 <Tip>
-  In most workflows you want the highest-scoring proposal on `grounding` and `completeness`. Use `risk` and `cost` as tiebreakers when multiple proposals score closely on the primary dimensions.
+  `evaluateCaseProposals()` internally weights `grounding` and `consistency` most heavily when selecting the best proposal. Proposals with blocking citation issues (missing quote, unknown source) are excluded entirely before scoring begins.
 </Tip>
 
 ---
@@ -175,9 +178,8 @@ for (const item of extractedItems) {
   item.validationIssues = issues;
 }
 
-// 4. Score any competing interpretations before committing
-const ranked = evaluateCaseProposals(competingProposals);
-const bestProposal = ranked[0];
+// 4. Select the best competing interpretation before committing
+const bestProposal = evaluateCaseProposals(competingProposals);
 ```
 
 <CardGroup cols={2}>

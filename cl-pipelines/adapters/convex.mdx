@@ -1,5 +1,5 @@
 ---
-title: "Wiring CL Pipelines with Convex"
+title: "Connecting CL Pipelines to Convex Storage and Scheduler"
 sidebarTitle: "Convex"
 description: "Step-by-step guide to connecting cl-pipelines to Convex using pipelineFields, createConvexStorageAdapter, and createConvexSchedulerAdapter."
 ---
@@ -104,18 +104,18 @@ export const setCheckpoint = internalMutation({
 export const appendLog = internalMutation({
   args: {
     jobId: v.string(),
-    entry: v.object({
-      timestamp: v.number(),
-      message: v.string(),
-      phase: v.optional(v.string()),
-      level: v.optional(v.union(v.literal("info"), v.literal("warn"), v.literal("error"))),
-    }),
+    timestamp: v.number(),
+    message: v.string(),
+    phase: v.optional(v.string()),
+    level: v.optional(v.string()),
   },
-  handler: async (ctx, { jobId, entry }) => {
+  handler: async (ctx, { jobId, timestamp, message, phase, level }) => {
     const doc = await ctx.db.get(jobId as any);
     if (!doc) return;
     const log = doc.pipelineLog ?? [];
-    await ctx.db.patch(jobId as any, { pipelineLog: [...log, entry] });
+    await ctx.db.patch(jobId as any, {
+      pipelineLog: [...log, { timestamp, message, phase, level }],
+    });
   },
 });
 ```

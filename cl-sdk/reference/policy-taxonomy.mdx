@@ -1,5 +1,5 @@
 ---
-title: "ACORD Line of Business Codes and Policy Taxonomy"
+title: "ACORD Line of Business Codes and CL SDK Policy Taxonomy"
 sidebarTitle: "Policy Taxonomy"
 description: "Use the policy-taxonomy sub-path export to validate, normalize, and label ACORD LOB codes across all 107 accepted commercial and personal lines."
 ---
@@ -42,7 +42,7 @@ import {
 </ResponseField>
 
 <ResponseField name="LEGACY_POLICY_TYPE_TO_LOB" type="Record<string, AcordLobCode>">
-  Maps legacy `policyType` string values (e.g. `"general_liability"`, `"commercial_auto"`) to canonical ACORD codes. Used internally by the extractor's migration layer.
+  Maps legacy `policyType` string values (e.g. `"general_liability"`, `"commercial_auto"`) to canonical ACORD codes. Used by the extractor to normalize legacy policy type strings on ingestion.
 </ResponseField>
 
 <ResponseField name="PERSONAL_LOB_CODES" type="Set<AcordLobCode>">

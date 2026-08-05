@@ -1,5 +1,5 @@
 ---
-title: "Building and Using Source Spans for Evidence"
+title: "Building Source Spans for a Verifiable Evidence Layer"
 sidebarTitle: "Source Spans"
 description: "Learn how to build SourceSpan objects from PDF pages, sections, tables, and free text to create a stable, verifiable evidence layer."
 ---
@@ -17,6 +17,7 @@ interface SourceSpan {
   kind: "pdf_text" | "pdf_image" | "html" | "markdown" | "plain_text" | "structured_field";
   text: string;
   hash: string;
+  textHash?: string;
   pageStart?: number;
   pageEnd?: number;
   sectionId?: string;
@@ -29,8 +30,10 @@ interface SourceSpan {
     columnIndex?: number;
     columnName?: string;
     rowSpanId?: string;
+    tableSpanId?: string;
     isHeader?: boolean;
   };
+  bbox?: SourceSpanBBox[];
   location?: SourceSpanLocation;
   metadata?: Record<string, string>;
 }

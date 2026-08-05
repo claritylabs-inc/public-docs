@@ -49,9 +49,8 @@ export function App() {
 On mount, `SyncProvider` runs the following sequence:
 
 1. Calls `store.registerMutations(mutations)` if `mutations` was provided.
-2. Calls `await store.hydrate()` to load IndexedDB and run any pending migrations.
-3. If `flushOnHydrate` is `true`, calls `await store.flushPendingMutations()`.
-4. Notifies all subscribers, causing `useSyncStatus().hydrated` to become `true`.
+2. Calls `await store.hydrate()` to load IndexedDB and run any pending migrations. `hydrate()` sets `status.hydrated = true` and notifies all subscribers when it completes.
+3. If `flushOnHydrate` is `true`, calls `await store.flushPendingMutations()` after hydration resolves.
 
 All children render immediately — they see `status.hydrated === false` on the first render, then re-render once hydration completes. Use `useSyncStatus()` to gate content on hydration:
 

@@ -1,5 +1,5 @@
 ---
-title: "Policy Classification with ACORD LOB Codes"
+title: "Policy Classification Using ACORD Lines-of-Business Codes"
 sidebarTitle: "Classification"
 description: "Learn how CL SDK 4.0 classifies insurance policies using ACORD lines-of-business codes returned as part of the source-backed operational profile."
 ---
@@ -29,18 +29,20 @@ If you are migrating from an earlier version of the SDK, the table below maps ev
 | Legacy value | ACORD code(s) |
 |---|---|
 | `general_liability` | `CGL` |
-| `commercial_property` | `PROPC` |
+| `commercial_property` | `PROP` |
 | `commercial_auto`, `non_owned_auto` | `AUTOB` |
 | `workers_comp` | `WORK` |
 | `umbrella` | `UMBRC` |
 | `excess_liability` | `EXLIA` |
-| `professional_liability` | `EO` |
-| `cyber`, `environmental`, `product_liability` | `OLIB` |
-| `management_liability_package` | `DO`, `EPLI`, `FIDUC` |
+| `professional_liability` | `PL` |
+| `cyber` | `CYBER` |
+| `environmental`, `product_liability` | `OLIB` |
+| `management_liability_package` | `MGMLI` |
 | `homeowners_ho3`, `homeowners_ho5` | `HOME` |
 | `renters_ho4`, `condo_ho6` | `HOME` |
 | `flood_nfip`, `flood_private` | `FLOOD` |
-| `life`, `other` | `UN` |
+| `travel` | `TRVL` |
+| `life`, `long_term_care`, `pet`, `identity_theft`, `title`, `other` | `UN` |
 
 <Warning>
   The legacy `policyType` string field is deprecated and will be removed in a future major version. Migrate your code to read `linesOfBusiness` from the operational profile instead.
@@ -91,12 +93,15 @@ import {
     ```
   </Tab>
   <Tab title="resolveOperationalProfileLinesOfBusiness">
-    Reads the `linesOfBusiness` field from a `PolicyOperationalProfile` and returns the resolved, normalized code array. Use this when you receive a profile object and want a clean code list without manual normalization.
+    Resolves the final normalized code array from a `PolicyOperationalProfile` by combining the profile's `linesOfBusiness` hint with coverage-derived inference. Use this when you have a full profile object and want a single authoritative code list.
 
     ```typescript
     import { resolveOperationalProfileLinesOfBusiness } from "@claritylabs/cl-sdk/policy-taxonomy";
 
-    const codes = resolveOperationalProfileLinesOfBusiness(operationalProfile);
+    const { linesOfBusiness } = resolveOperationalProfileLinesOfBusiness({
+      profileLinesOfBusiness: operationalProfile.linesOfBusiness,
+      coverages: operationalProfile.coverages,
+    });
     // ["CGL", "AUTOB"]
     ```
   </Tab>
@@ -125,7 +130,10 @@ import {
 const extractor = createExtractor({ generateObject });
 const result = await extractor.extract(pdfBase64, "doc-123", { sourceSpans });
 
-const codes = resolveOperationalProfileLinesOfBusiness(result.operationalProfile!);
+const { linesOfBusiness: codes } = resolveOperationalProfileLinesOfBusiness({
+  profileLinesOfBusiness: result.operationalProfile!.linesOfBusiness,
+  coverages: result.operationalProfile!.coverages,
+});
 
 for (const code of codes) {
   console.log(`${code}: ${ACORD_LOB_LABELS[code]}`);

@@ -29,7 +29,7 @@ createScopeKey({ appId: "my-app", environment: "prod", userId: "u-1", orgId: "o-
 ```
 
 <Note>
-  If `userId` or `orgId` are omitted, their segment in the scope key is an empty string. For single-user apps without auth, omitting both is fine.
+  If `environment` is omitted, its segment defaults to `"default"`. If `userId` is omitted it defaults to `"anonymous"`, and if `orgId` is omitted it defaults to `"none"`. For single-user apps without auth, omitting both is fine.
 </Note>
 
 ## Collections

@@ -1,7 +1,7 @@
 ---
 title: "Source Grounding: Evidence Layer for All Workflows"
 sidebarTitle: "Overview"
-description: "Source grounding is the shared evidence layer used by extraction, query, application, PCE, and case workflows in CL SDK."
+description: "Source grounding is the shared evidence layer for extraction, query, PCE, and case workflows in CL SDK. Every result traces back to a quoted span."
 ---
 
 Source grounding gives every CL SDK workflow a stable, verifiable evidence foundation. Instead of relying on free-form LLM output, all extraction, query, PCE, and case workflows anchor their results to discrete source units — spans, nodes, and chunks — that trace directly back to the original document text. When a coverage limit or exclusion clause appears in an output, you can always point to the exact page, section, and quoted text that produced it.
@@ -58,7 +58,7 @@ Every field in `result` that carries a quoted value traces back to a span ID in 
 
 ## Architecture
 
-```
+```text
 Raw PDF / Email / Attachment
         │
         ▼

@@ -134,7 +134,7 @@ await store.flushPendingMutations();
 
 ```typescript
 await store.flushPendingMutations({
-  // Also retry items marked "failed" (default: false)
+  // Also retry items marked "failed" (default: true)
   includeFailed: true,
 
   // Only flush specific mutations

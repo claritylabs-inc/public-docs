@@ -1,5 +1,5 @@
 ---
-title: "CL SDK TypeScript Type Reference"
+title: "CL SDK TypeScript Type and Interface Reference Guide"
 sidebarTitle: "Types"
 description: "TypeScript type and interface reference for CL SDK, covering provider callbacks, extraction, documents, source grounding, storage, agents, and PCE."
 ---
@@ -28,12 +28,12 @@ These types define the function signatures your application must implement and p
   Calls your embedding provider to produce a vector representation of a text string. Required by `createSqliteStore` and any `SourceStore` that uses vector search.
 </ResponseField>
 
-<ResponseField name="TokenUsage" type="{ inputTokens: number; outputTokens: number; totalTokens: number }">
+<ResponseField name="TokenUsage" type="{ inputTokens: number; outputTokens: number }">
   Reported by the `onTokenUsage` callback passed to factory functions. Track costs per extraction or query call.
 </ResponseField>
 
-<ResponseField name="LogFn" type="(level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown) => void">
-  Optional logging callback accepted by factory functions. Wire it to your application logger.
+<ResponseField name="LogFn" type="(message: string) => Promise<void>">
+  Optional async logging callback accepted by factory functions. Wire it to your application logger.
 </ResponseField>
 
 ---
@@ -53,15 +53,15 @@ These types define the function signatures your application must implement and p
 </ResponseField>
 
 <ResponseField name="ExtractionResult" type="object">
-  The output of a successful extraction. Includes the extracted `InsuranceDocument`, `sourceSpans` used, `operationalProfile`, and token usage stats.
+  The output of a successful extraction. Includes the extracted `InsuranceDocument` (compatibility projection), `sourceSpans`, `sourceChunks`, `sourceTree` (canonical source hierarchy), `operationalProfile`, optional `coverageRecovery` diagnostics, `tokenUsage`, `performanceReport`, and `reviewReport`.
 </ResponseField>
 
 <ResponseField name="PolicyOperationalProfile" type="object">
-  A source-backed projection of product-critical facts: lines of business (as ACORD codes), effective date, expiration date, total insured value, key limits, and retentions. Every field is a `SourceBackedValue`.
+  A source-backed projection of product-critical facts: `documentType`, `linesOfBusiness` (ACORD codes), `policyNumber`, `namedInsured`, `insurer`, `broker`, `effectiveDate`, `expirationDate`, `retroactiveDate`, `premium`, `operationsDescription`, `declarationFacts`, `coverages`, `coverageSchedules`, `premiumBreakdown`, `taxesAndFees`, `totalCost`, `parties`, and `endorsementSupport`. Every value field is a `SourceBackedValue`.
 </ResponseField>
 
-<ResponseField name="SourceBackedValue<T>" type="{ value: T; spanId?: string; quote?: string; confidence?: number }">
-  A wrapper type that pairs an extracted value with its source span ID and the quoted text that supports it.
+<ResponseField name="SourceBackedValue" type="{ value: string; normalizedValue?: string; confidence?: 'low' | 'medium' | 'high'; sourceNodeIds: string[]; sourceSpanIds: string[] }">
+  A wrapper type that pairs an extracted value with its source span and node IDs. `normalizedValue` holds the display-safe canonical form for identity fields such as named insured, insurer, and policy number.
 </ResponseField>
 
 ---
@@ -105,11 +105,11 @@ These types define the function signatures your application must implement and p
 </ResponseField>
 
 <ResponseField name="DocumentSourceNode" type="object">
-  A node in the parser-grounded document hierarchy. Fields: `id`, `documentId`, `kind` (see below), `label`, `spanIds`, `children`, `pageStart`, `pageEnd`, `sectionId`, `formNumber`.
+  A node in the parser-grounded document hierarchy. Fields: `id`, `documentId`, `parentId`, `kind`, `title`, `description`, `textExcerpt`, `sourceSpanIds`, `pageStart`, `pageEnd`, `bbox`, `order`, `path`, `metadata`.
 </ResponseField>
 
 <ResponseField name="DocumentSourceNodeKind" type="string enum">
-  One of: `"document"` | `"page_group"` | `"form"` | `"endorsement"` | `"section"` | `"schedule"` | `"clause"` | `"table"` | `"row"` | `"cell"` | `"text"`
+  One of: `"document"` | `"page_group"` | `"page"` | `"form"` | `"endorsement"` | `"section"` | `"schedule"` | `"clause"` | `"table"` | `"table_row"` | `"table_cell"` | `"text"`
 </ResponseField>
 
 ---
@@ -133,7 +133,7 @@ These types define the function signatures your application must implement and p
 </ResponseField>
 
 <ResponseField name="ConversationTurn" type="object">
-  A single conversational exchange stored in `MemoryStore`. Fields: `id`, `conversationId`, `role` (`"user"` | `"assistant"`), `content`, `timestamp`, `metadata`.
+  A single conversational exchange stored in `MemoryStore`. Fields: `id`, `conversationId`, `role` (`"user"` | `"assistant"` | `"tool"`), `content`, `toolName`, `toolResult`, `timestamp`.
 </ResponseField>
 
 ---

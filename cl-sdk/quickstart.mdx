@@ -169,7 +169,7 @@ console.log(result.answer);
 // "The General Liability deductible is $1,000 per occurrence."
 
 console.log(result.citations);
-// [{ chunkId: "...", text: "...", pages: [3] }]
+// [{ index: 1, chunkId: "...", documentId: "...", quote: "...", relevance: 0.95 }]
 ```
 
 ### Process an application
@@ -216,7 +216,6 @@ Pass an `onProgress` callback to any factory function to receive human-readable 
 
 ```typescript
 const extractor = createExtractor({
-  generateText,
   generateObject,
   onProgress: (message) => console.log(`[cl-sdk] ${message}`),
 });

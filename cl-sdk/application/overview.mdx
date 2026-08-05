@@ -1,7 +1,7 @@
 ---
-title: "Insurance Application Processing Pipeline"
+title: "Insurance Application Processing Pipeline: Overview"
 sidebarTitle: "Overview"
-description: "Process insurance application PDFs end-to-end with an agentic pipeline that extracts fields, auto-fills from context, batches questions, and maps a final PDF."
+description: "Process insurance application PDFs end-to-end: extract fields, auto-fill from context, batch questions for clients, and map the completed PDF."
 ---
 
 The CL SDK application pipeline takes a raw insurance application PDF and carries it through a fully agentic process — classifying the document, extracting every fillable field, auto-filling what it can from your organization's context and connected policy records, grouping remaining questions into focused email batches, and mapping a final completed PDF once all answers are in. Each phase uses a purpose-built focused agent sized for its task so you don't burn large-model tokens on lightweight classification work.
@@ -101,7 +101,7 @@ The pipeline composes a set of focused, single-responsibility agents. Each is si
 
 The pipeline advances `state.status` through a defined sequence. You can check status at any point to understand where in the pipeline an application is.
 
-```
+```text
 classifying → extracting → auto_filling → batching → collecting
     → confirming → mapping → packet_ready / submitted / complete
 ```
@@ -184,16 +184,16 @@ const next = planNextApplicationQuestions({
   Structured generation function used by the classifier, extractor, batcher, and reply router.
 </ParamField>
 
-<ParamField path="applicationStore" type="ApplicationStore" required>
-  Persistence store for application state. The pipeline reads and writes state here at each phase.
+<ParamField path="applicationStore" type="ApplicationStore">
+  Persistence store for application state. The pipeline reads and writes state here at each phase. When omitted, state is not persisted between calls — suitable for single-shot processing but not multi-turn reply loops.
 </ParamField>
 
-<ParamField path="documentStore" type="DocumentStore" required>
-  Store used by the `lookup-filler` agent to search policy records during document search fill.
+<ParamField path="documentStore" type="DocumentStore">
+  Store used by the `lookup-filler` agent to search policy records during document search fill. When omitted, document search fill is skipped.
 </ParamField>
 
-<ParamField path="memoryStore" type="MemoryStore" required>
-  Conversation memory store used to maintain context across the reply loop.
+<ParamField path="memoryStore" type="MemoryStore">
+  Memory store used for vector-based answer backfill. When omitted, memory-backed backfill is skipped (a custom `backfillProvider` can be used instead).
 </ParamField>
 
 <ParamField path="orgContext" type="OrgContextEntry[]">

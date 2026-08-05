@@ -1,5 +1,5 @@
 ---
-title: "CL SDK API Reference: Core Functions"
+title: "CL SDK API Reference: All Public Factory Functions"
 sidebarTitle: "API Reference"
 description: "Complete reference for all CL SDK factory functions, source grounding builders, storage factories, agent prompts, PCE helpers, and PDF operations."
 ---
@@ -37,7 +37,7 @@ const result = await extractor.extract(input, documentId?, options?);
 **`options`** (`ExtractOptions`):
 
 <ParamField body="sourceSpans" type="SourceSpan[]">
-  Pre-built source spans to use instead of extracting them from the PDF. When provided, the extractor skips its internal span builder.
+  Pre-built source spans to use for this document. When provided, the extractor uses these spans directly instead of deriving spans from the PDF.
 </ParamField>
 
 <ParamField body="coverageRecovery.enabled" type="boolean" default="false">
@@ -64,8 +64,9 @@ const agent = createQueryAgent({
   memoryStore,            // required
   sourceRetriever,        // optional — defaults to memoryStore
   concurrency,            // optional
-  maxVerifyRounds,        // optional — re-verification iterations (default: 2)
-  retrievalLimit,         // optional — spans per retrieval call (default: 5)
+  retrievalMode,          // optional — default retrieval strategy for all queries
+  maxVerifyRounds,        // optional — re-verification iterations (default: 1)
+  retrievalLimit,         // optional — spans per retrieval call (default: 10)
   onTokenUsage,           // optional
   onProgress,             // optional
 });

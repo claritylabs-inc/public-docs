@@ -1,7 +1,7 @@
 ---
-title: "Policy Change Endorsement Workflows"
+title: "Policy Change Endorsement: Agent Overview and Quick Start"
 sidebarTitle: "Overview"
-description: "Turn natural-language change requests into structured, reviewable carrier work with the CL SDK Policy Change Endorsement agent and submission tooling."
+description: "Turn natural-language change requests into structured, reviewable carrier work with the CL SDK PCE agent, validation, and submission tooling."
 ---
 
 The Policy Change Endorsement (PCE) agent converts natural-language change requests — adding a vehicle, updating a named insured, adjusting a coverage limit — into typed, grounded, reviewable carrier work. Instead of free-form emails to a carrier, you get structured `PolicyChangeItem` arrays with evidence citations, validation issues, and ready-to-review submission packets.
@@ -95,12 +95,12 @@ After `processChangeRequest()` resolves, the returned `state` object carries eve
 
 ## Agent Configuration
 
-<ParamField path="generateObject" type="GenerateObjectFn" required>
-  Structured object generation function for parsing change items and running validation schemas.
+<ParamField path="generateObject" type="GenerateObjectFn">
+  Structured object generation function for parsing change items and running validation schemas. When omitted, the agent uses heuristic normalization without model calls — useful for testing the workflow without provider access.
 </ParamField>
 
-<ParamField path="sourceRetriever" type="SourceRetriever" required>
-  Retriever used to pull policy and conversation evidence. Use `MemorySourceStore` for testing or provide a production implementation backed by your document store.
+<ParamField path="sourceRetriever" type="SourceRetriever">
+  Retriever used to pull policy and conversation evidence. Use `MemorySourceStore` for testing or provide a production implementation backed by your document store. When omitted, evidence collection is limited to any explicit sources you pass in the request.
 </ParamField>
 
 <ParamField path="executionMode" type='"deterministic_tree" | "market_eval" | "hybrid" | "auto"' default='"auto"'>
