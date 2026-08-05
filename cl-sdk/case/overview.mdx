@@ -9,19 +9,19 @@ Case workflow primitives are the shared building blocks that power the PCE agent
 ## Core Types
 
 <CardGroup cols={2}>
-  <Card title="CaseEvidenceSource" icon="file-lines">
+  <Card title="CaseEvidenceSource" icon="file-text">
     Source text used for validation and citation. Carries a `sourceId`, raw text, and optional metadata like page number or document type.
   </Card>
-  <Card title="CaseCitation" icon="quote-right">
+  <Card title="CaseCitation" icon="quote">
     A citation with a `sourceId`, exact `quote`, optional `page` number, and optional `fieldPath`. Used to ground claims in case items back to real source text.
   </Card>
-  <Card title="CaseValidationIssue" icon="triangle-exclamation">
+  <Card title="CaseValidationIssue" icon="triangle-alert">
     An `info`, `warning`, or `blocking` issue tied to an `itemId` and `fieldPath`. Blocking issues must be resolved before a submission packet is considered ready.
   </Card>
-  <Card title="MissingInfoQuestion" icon="circle-question">
+  <Card title="MissingInfoQuestion" icon="circle-question-mark">
     A question tied to an `itemId` and optional `fieldPath`. Surfaces required information that could not be inferred from the request or evidence sources.
   </Card>
-  <Card title="CasePacketArtifact" icon="file-export">
+  <Card title="CasePacketArtifact" icon="file-up">
     A generated artifact — email draft, underwriter summary, JSON packet, or validation report — associated with a submission packet.
   </Card>
   <Card title="CaseState" icon="database">
@@ -183,10 +183,10 @@ const bestProposal = evaluateCaseProposals(competingProposals);
 ```
 
 <CardGroup cols={2}>
-  <Card title="PCE Overview" href="/cl-sdk/pce/overview" icon="pen-to-square">
+  <Card title="PCE Overview" href="/cl-sdk/pce/overview" icon="square-pen">
     See how these primitives are assembled in the built-in Policy Change Endorsement agent.
   </Card>
-  <Card title="Application Pipeline" href="/cl-sdk/application/overview" icon="file-signature">
+  <Card title="Application Pipeline" href="/cl-sdk/application/overview" icon="file-pen-line">
     Explore how case state patterns apply to the application processing pipeline.
   </Card>
 </CardGroup>

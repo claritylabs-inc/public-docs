@@ -5,7 +5,7 @@
   "theme": "luma",
   "colors": {
     "primary": "#000000",
-    "light": "#A0D2FA",
+    "light": "#FFFFFF",
     "dark": "#737373"
   },
   "logo": {
@@ -19,13 +19,18 @@
   },
   "fonts": {
     "heading": {
-      "family": "Geist",
-      "weight": 600
+      "family": "Redaction",
+      "weight": 400,
+      "source": "/fonts/redaction/Redaction-Regular.woff2",
+      "format": "woff2"
     },
     "body": {
       "family": "Geist",
       "weight": 400
     }
+  },
+  "icons": {
+    "library": "lucide"
   },
   "background": {
     "color": {
