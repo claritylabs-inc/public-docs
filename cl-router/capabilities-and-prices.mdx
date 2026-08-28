@@ -1,0 +1,88 @@
+---
+title: "Model Capabilities and the Reviewed Price Manifest"
+sidebarTitle: "Capabilities & prices"
+description: "Look up token limits, image and audio support, and reviewed nano-USD token prices for every model route in the cl-router policy package."
+---
+
+The policy package ships reviewed capability metadata and a versioned price manifest so clients and the router agree on model limits and cost attribution.
+
+## Capabilities
+
+`MODEL_CAPABILITIES` maps model identifiers to a `ModelCapabilityConfig`:
+
+```typescript
+type ModelCapabilityConfig = {
+  modelName: string;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  defaultOutputTokens?: number;
+  longListOutputTokens?: number;
+  taskOutputTokens?: Readonly<Record<string, number>>;
+  supportsImageInput?: boolean;
+  supportsAudioInput?: boolean;
+};
+```
+
+`taskOutputTokens` holds per-task-kind output budgets. For example, OpenAI GPT 5.4 caps `extraction_long_list` at 24,576 output tokens and `extraction_classify` at 2,048.
+
+### Lookup helpers
+
+- `modelCapabilitiesForRoute(route)` returns the capability entry for a route, falling back to the direct-provider model identifier, then to a bare `{ modelName }` entry.
+- `modelSupportsImageInput(route)` returns `true` when the entry declares image support or the provider is `openai`, `anthropic`, `google`, or `xai`.
+- `modelSupportsAudioInput(route)` returns `true` only for OpenAI models that declare audio support.
+- `modelRouteSupportsTask(task, route)` checks a route against a task. `chat_vision` requires image input, `voice_transcription` requires audio input, and `embeddings` requires a priced embedding modality.
+
+### Effective output tokens
+
+`getEffectiveMaxTokens` clamps a requested output budget to the route's limit, preferring the per-task-kind budget when one exists:
+
+```typescript
+import { getEffectiveMaxTokens, MODEL_TASK_ROUTES } from "@claritylabs/cl-router-policy";
+
+const maxTokens = getEffectiveMaxTokens(
+  50_000,
+  MODEL_TASK_ROUTES.extraction,
+  "extraction_long_list",
+);
+```
+
+## Price manifest
+
+`PRICE_MANIFEST` is the reviewed, versioned price list. Rates are stored as integer nano-USD per token, so call-cost arithmetic stays integral: one USD per million tokens equals 1,000 nano-USD per token.
+
+```typescript
+type ModelTokenPrice = {
+  provider: ModelProvider;
+  model: string;
+  modality: "text" | "embedding" | "audio";
+  inputNanoUsdPerToken: number;
+  cachedInputNanoUsdPerToken?: number;
+  cacheWriteNanoUsdPerToken?: number;
+  outputNanoUsdPerToken?: number;
+  longContextThresholdTokens?: number;
+  longContextInputMultiplier?: number;
+  longContextOutputMultiplier?: number;
+  sourceUrl: string;
+};
+```
+
+Every entry records the `sourceUrl` it was reviewed against. Long-context fields describe threshold-based price multipliers for models that charge more past a token threshold.
+
+### Looking up a price
+
+`priceForRoute(route, manifest?)` returns a discriminated union:
+
+```typescript
+import { priceForRoute, MODEL_TASK_ROUTES } from "@claritylabs/cl-router-policy";
+
+const lookup = priceForRoute(MODEL_TASK_ROUTES.chat);
+
+if (lookup.status === "priced") {
+  console.log(lookup.price.inputNanoUsdPerToken);
+} else {
+  // status === "unpriced", reason === "missing_manifest_entry"
+  console.warn(`No reviewed price for ${lookup.provider}/${lookup.model}`);
+}
+```
+
+Unknown models stay explicitly `unpriced`, never zero. Treat an `unpriced` result as missing data, not free usage. `modelPriceKey(provider, model)` builds the `provider/model` key used by manifest entries.

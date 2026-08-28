@@ -178,6 +178,23 @@
             "pages": ["cl-pipelines/reference"]
           }
         ]
+      },
+      {
+        "tab": "CL Router Policy",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["cl-router/index"]
+          },
+          {
+            "group": "Routing",
+            "pages": [
+              "cl-router/tasks-and-routes",
+              "cl-router/routing-safety",
+              "cl-router/capabilities-and-prices"
+            ]
+          }
+        ]
       }
     ]
   },

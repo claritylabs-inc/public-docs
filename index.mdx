@@ -4,9 +4,9 @@ sidebarTitle: "Overview"
 description: "Open-source TypeScript SDKs for regulated AI agents, local-first sync, and durable workflow execution. Available on npm and GitHub."
 ---
 
-Clarity Labs publishes three open-source TypeScript SDKs designed for developers building production AI agents and data-intensive applications. Each package ships as ESM + CJS with full TypeScript declarations and is available on npm under the `@claritylabs` scope.
+Clarity Labs publishes open-source TypeScript packages designed for developers building production AI agents and data-intensive applications. Each package ships with full TypeScript declarations and is available on npm under the `@claritylabs` scope.
 
-<CardGroup cols={3}>
+<CardGroup cols={2}>
   <Card title="CL SDK" icon="shield-check" href="/cl-sdk/index">
     Insurance intelligence primitives — PDF extraction, citation-backed queries, PCE workflows, and composable agent prompts.
   </Card>
@@ -15,6 +15,9 @@ Clarity Labs publishes three open-source TypeScript SDKs designed for developers
   </Card>
   <Card title="CL Pipelines" icon="workflow" href="/cl-pipelines/index">
     Durable execution primitives — crash-safe phase runners, LLM agent loops, and headless status UI.
+  </Card>
+  <Card title="CL Router Policy" icon="route" href="/cl-router/index">
+    Model-routing vocabulary — task identifiers, reviewed default routes, challenger and fallback helpers, and a versioned price manifest.
   </Card>
 </CardGroup>
 
@@ -44,16 +47,19 @@ All packages are published to npm under the `@claritylabs` scope.
 npm install @claritylabs/cl-sdk pdf-lib zod
 npm install @claritylabs/cl-sync
 npm install @claritylabs/cl-pipelines zod
+npm install @claritylabs/cl-router-policy
 ```
 ```bash yarn
 yarn add @claritylabs/cl-sdk pdf-lib zod
 yarn add @claritylabs/cl-sync
 yarn add @claritylabs/cl-pipelines zod
+yarn add @claritylabs/cl-router-policy
 ```
 ```bash pnpm
 pnpm add @claritylabs/cl-sdk pdf-lib zod
 pnpm add @claritylabs/cl-sync
 pnpm add @claritylabs/cl-pipelines zod
+pnpm add @claritylabs/cl-router-policy
 ```
 </CodeGroup>
 
