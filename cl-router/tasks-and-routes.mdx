@@ -1,0 +1,77 @@
+---
+title: "Model Tasks and Reviewed Default Routes"
+sidebarTitle: "Tasks & routes"
+description: "Resolve SDK task kinds to the cl-router task vocabulary and look up the reviewed default provider and model route for every task."
+---
+
+Every request to cl-router carries a task. This page explains the task vocabulary that `@claritylabs/cl-router-policy` exports and how a specific call resolves to a reviewed default route.
+
+## Providers
+
+`MODEL_PROVIDERS` lists every provider identifier in the vocabulary: `openai`, `anthropic`, `google`, `xai`, `mistral`, `cohere`, `fireworks`, `moonshot`, and `deepseek`. `DIRECT_MODEL_PROVIDERS` is the subset with an executable direct-provider adapter in cl-router; it excludes `moonshot`.
+
+A route pairs a provider with a model identifier:
+
+```typescript
+type ModelRoute = {
+  provider: ModelProvider;
+  model: string;
+};
+```
+
+## Tasks and task kinds
+
+`MODEL_TASKS` defines the coarse route vocabulary: `chat`, `chat_vision`, `voice_transcription`, `email_draft`, `email_reply`, `extraction`, `extraction_preview`, `extraction_coverage_recovery`, `classification`, `requirement_extraction`, `org_memory_extraction`, `analysis`, `summary`, `triage`, `email_extraction`, `document_extraction`, `security`, `mailbox_coordinator`, and `embeddings`.
+
+`KNOWN_MODEL_TASK_KINDS` names the more specific kinds emitted by the current CL SDK and Spot integration, such as `extraction_classify`, `query_reason`, and `pce_impact_analysis`. The `ModelTaskKind` type keeps an open string tail, so the vocabulary stays forward-compatible with newer SDK kinds.
+
+## Resolving a call
+
+Use `modelTaskForCall` to map a base task plus an optional task kind to the route vocabulary:
+
+```typescript
+import { modelTaskForCall, taskFamilyForCall } from "@claritylabs/cl-router-policy";
+
+modelTaskForCall("extraction", "extraction_classify"); // "classification"
+modelTaskForCall("extraction", "extraction_focused");  // "extraction"
+modelTaskForCall("chat", "query_reason");              // "chat"
+modelTaskForCall("chat", "pce_impact_analysis");       // "analysis"
+```
+
+The resolution rules are:
+
+- `extraction_classify` and `query_classify` resolve to `classification`.
+- `extraction_coverage_recovery` keeps its own task.
+- Other `extraction_*` kinds resolve to `extraction`.
+- Other `query_*` kinds resolve to `chat`, or `chat_vision` when the base task is `chat_vision`.
+- `pce_*` kinds resolve to `analysis`.
+- Anything else keeps the base task.
+
+`taskFamilyForCall` returns the most specific stable identifier for quality tracking: the task kind when supplied, otherwise the resolved task. Routing safety helpers take this family value.
+
+## Default routes
+
+`MODEL_TASK_ROUTES` maps every task to its reviewed default route. For example, `chat` routes to Fireworks DeepSeek V4 Flash, `chat_vision` routes to OpenAI `gpt-5.6-terra`, and `embeddings` routes to OpenAI `text-embedding-3-small`. `FIREWORKS_MODEL_IDS` holds the reviewed serverless Fireworks model identifiers, including Muse Glimmer 30B and Inkling.
+
+`SPECIAL_MODEL_ROUTES` adds routes outside the per-task map:
+
+| Route ID | Purpose |
+|---|---|
+| `fallback` | The shared deterministic recovery route (`FALLBACK_MODEL`). |
+| `extraction_quality` | The quality-primary route for select extraction kinds (`EXTRACTION_QUALITY_MODEL`). |
+| `extraction_coverage_cleanup` | The coverage-cleanup route, also exported as `QUERY_REASON_FALLBACK_MODEL`. |
+
+Use `defaultModelRouteForId` to resolve either kind of route ID:
+
+```typescript
+import { defaultModelRouteForId, MODEL_TASK_ROUTES } from "@claritylabs/cl-router-policy";
+
+const chatRoute = MODEL_TASK_ROUTES.chat;
+const fallbackRoute = defaultModelRouteForId("fallback");
+```
+
+## Route helpers
+
+- `directProviderModelForRoute(route)` returns the provider-specific model identifier used for direct execution, or `null` when the provider has no direct adapter for that model. For example, Anthropic dotted versions rewrite to dashed identifiers.
+- `sameModelRoute(left, right)` compares two routes by provider and model.
+- `isModelTask(value)` narrows a string to `ModelTask`.
