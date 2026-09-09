@@ -113,7 +113,7 @@ type PhaseResult<TState> =
 
 ## How the pieces connect
 
-```text
+```
 runPipeline()
   └─ writes initial Checkpoint<TState> to StorageAdapter
   └─ calls SchedulerAdapter.scheduleAdvance(jobId, 0)

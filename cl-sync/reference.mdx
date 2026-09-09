@@ -31,7 +31,7 @@ This page is a concise index of every public export in `@claritylabs/cl-sync`. F
 </ResponseField>
 
 <ResponseField name="createScopeKey(scope)" type="string">
-  Derives a composite scope key string in the format `"appId:env:userId:orgId"`. Omitted optional fields produce an empty segment.
+  Derives a composite scope key string in the format `"appId:env:userId:orgId"`. Omitted `environment`, `userId`, and `orgId` default to `default`, `anonymous`, and `none`.
 
   ```typescript
   createScopeKey({ appId: "app", environment: "prod", userId: "u-1", orgId: "o-1" });
