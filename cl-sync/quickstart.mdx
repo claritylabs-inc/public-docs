@@ -7,147 +7,145 @@ description: "Install CL Sync, define a collection and mutation, create a store,
 This guide walks you through building a working todo app with CL Sync. You'll define a typed collection, write an optimistic mutation, create a scoped store, and render reactive data with hooks — all in about five minutes.
 
 <Steps>
+  ### Install the package
 
-### Install the package
+  CL Sync has no required peer dependencies. Install the core package:
 
-CL Sync has no required peer dependencies. Install the core package:
+  ```bash
+  npm install @claritylabs/cl-sync
+  ```
 
-```bash
-npm install @claritylabs/cl-sync
-```
+  If you plan to use the React hooks, ensure you have `react >=18.0.0` already installed. For the Convex adapter, you need `convex >=1.30.0`.
 
-If you plan to use the React hooks, ensure you have `react >=18.0.0` already installed. For the Convex adapter, you need `convex >=1.30.0`.
+  ### Define a collection
 
-### Define a collection
+  A collection describes a named set of records. `defineCollection` is a typed identity helper — it exists purely for type inference and returns the definition unchanged.
 
-A collection describes a named set of records. `defineCollection` is a typed identity helper — it exists purely for type inference and returns the definition unchanged.
+  ```typescript
+  import { defineCollection, type SyncRecord } from "@claritylabs/cl-sync";
 
-```typescript
-import { defineCollection, type SyncRecord } from "@claritylabs/cl-sync";
+  type Todo = SyncRecord & {
+    id: string;
+    title: string;
+    completed: boolean;
+  };
 
-type Todo = SyncRecord & {
-  id: string;
-  title: string;
-  completed: boolean;
-};
+  export const todoCollection = defineCollection<Todo, { listId: string }>({
+    name: "todos",
+    getId: (todo) => todo.id,
+    deriveKey: (args) => args.listId,
+    sort: (a, b) => a.title.localeCompare(b.title),
+  });
+  ```
 
-export const todoCollection = defineCollection<Todo, { listId: string }>({
-  name: "todos",
-  getId: (todo) => todo.id,
-  deriveKey: (args) => args.listId,
-  sort: (a, b) => a.title.localeCompare(b.title),
-});
-```
+  `deriveKey` turns query arguments into a stable cache key. Records for `listId: "inbox"` are stored and retrieved separately from records for `listId: "archive"`.
 
-`deriveKey` turns query arguments into a stable cache key. Records for `listId: "inbox"` are stored and retrieved separately from records for `listId: "archive"`.
+  ### Define a mutation
 
-### Define a mutation
+  Mutations describe how to update local state optimistically (via `reducer`) and how to persist the change to your server (via `flush`). The outbox writes the mutation to IndexedDB before calling `flush`, so it survives a page reload.
 
-Mutations describe how to update local state optimistically (via `reducer`) and how to persist the change to your server (via `flush`). The outbox writes the mutation to IndexedDB before calling `flush`, so it survives a page reload.
+  ```typescript
+  import { defineMutation } from "@claritylabs/cl-sync";
 
-```typescript
-import { defineMutation } from "@claritylabs/cl-sync";
+  export const createTodo = defineMutation<
+    { id: string; title: string; listId: string },
+    { ok: true }
+  >({
+    name: "todos.create",
+    reducer: (store, args) => {
+      // Optimistic update — runs before the network call
+      const current = store.getCollection(todoCollection, { listId: args.listId }) ?? [];
+      void store.upsertCollection(todoCollection, { listId: args.listId }, [
+        ...current,
+        { id: args.id, title: args.title, completed: false },
+      ]);
+    },
+    flush: async (args, clientMutationId) => {
+      const response = await fetch("/api/todos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...args, clientMutationId }),
+      });
+      if (!response.ok) throw new Error(`Create failed: ${response.status}`);
+      return (await response.json()) as { ok: true };
+    },
+  });
+  ```
 
-export const createTodo = defineMutation<
-  { id: string; title: string; listId: string },
-  { ok: true }
->({
-  name: "todos.create",
-  reducer: (store, args) => {
-    // Optimistic update — runs before the network call
-    const current = store.getCollection(todoCollection, { listId: args.listId }) ?? [];
-    void store.upsertCollection(todoCollection, { listId: args.listId }, [
-      ...current,
-      { id: args.id, title: args.title, completed: false },
-    ]);
-  },
-  flush: async (args, clientMutationId) => {
-    const response = await fetch("/api/todos", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...args, clientMutationId }),
-    });
-    if (!response.ok) throw new Error(`Create failed: ${response.status}`);
-    return (await response.json()) as { ok: true };
-  },
-});
-```
+  <Tip>
+    Pass `clientMutationId` in your request body so your server can deduplicate retried mutations — CL Sync generates a stable ID per outbox entry and reuses it on retry.
+  </Tip>
 
-<Tip>
-  Pass `clientMutationId` in your request body so your server can deduplicate retried mutations — CL Sync generates a stable ID per outbox entry and reuses it on retry.
-</Tip>
+  ### Create the store
 
-### Create the store
+  `createSyncStore` is the entry point for all sync state. Scope your store to the current user so that data never leaks across sessions.
 
-`createSyncStore` is the entry point for all sync state. Scope your store to the current user so that data never leaks across sessions.
+  ```typescript
+  import { createSyncStore } from "@claritylabs/cl-sync";
 
-```typescript
-import { createSyncStore } from "@claritylabs/cl-sync";
+  const store = createSyncStore({
+    scope: {
+      appId: "todo-app",
+      environment: import.meta.env.MODE,
+      userId: currentUser.id,
+    },
+    schema: {
+      version: 1,
+      collections: [
+        { name: "todos", version: 1, fields: ["id", "title", "completed"] },
+      ],
+    },
+    mutations: [createTodo],
+  });
+  ```
 
-const store = createSyncStore({
-  scope: {
-    appId: "todo-app",
-    environment: import.meta.env.MODE,
-    userId: currentUser.id,
-  },
-  schema: {
-    version: 1,
-    collections: [
-      { name: "todos", version: 1, fields: ["id", "title", "completed"] },
-    ],
-  },
-  mutations: [createTodo],
-});
-```
+  <Note>
+    Create the store once and reuse the same instance across your component tree. Re-creating the store on every render resets all sync state.
+  </Note>
 
-<Note>
-  Create the store once and reuse the same instance across your component tree. Re-creating the store on every render resets all sync state.
-</Note>
+  ### Wrap with SyncProvider and use hooks
 
-### Wrap with SyncProvider and use hooks
+  `SyncProvider` mounts the store into React context, calls `store.hydrate()` on mount, and (with `flushOnHydrate`) replays any mutations that were pending when the user last closed the tab.
 
-`SyncProvider` mounts the store into React context, calls `store.hydrate()` on mount, and (with `flushOnHydrate`) replays any mutations that were pending when the user last closed the tab.
+  ```tsx
+  import {
+    SyncProvider,
+    useSyncCollection,
+    useSyncMutation,
+    useSyncStatus,
+  } from "@claritylabs/cl-sync/react";
 
-```tsx
-import {
-  SyncProvider,
-  useSyncCollection,
-  useSyncMutation,
-  useSyncStatus,
-} from "@claritylabs/cl-sync/react";
+  export function App() {
+    return (
+      <SyncProvider store={store} mutations={[createTodo]} flushOnHydrate>
+        <TodoList />
+      </SyncProvider>
+    );
+  }
 
-export function App() {
-  return (
-    <SyncProvider store={store} mutations={[createTodo]} flushOnHydrate>
-      <TodoList />
-    </SyncProvider>
-  );
-}
+  function TodoList() {
+    const todos = useSyncCollection(todoCollection, { listId: "inbox" }) ?? [];
+    const create = useSyncMutation(createTodo);
+    const status = useSyncStatus();
 
-function TodoList() {
-  const todos = useSyncCollection(todoCollection, { listId: "inbox" }) ?? [];
-  const create = useSyncMutation(createTodo);
-  const status = useSyncStatus();
+    return (
+      <button
+        disabled={!status.hydrated}
+        onClick={() =>
+          create({
+            id: crypto.randomUUID(),
+            listId: "inbox",
+            title: "Ship it",
+          })
+        }
+      >
+        Add todo ({todos.length} todos loaded)
+      </button>
+    );
+  }
+  ```
 
-  return (
-    <button
-      disabled={!status.hydrated}
-      onClick={() =>
-        create({
-          id: crypto.randomUUID(),
-          listId: "inbox",
-          title: "Ship it",
-        })
-      }
-    >
-      Add todo ({todos.length} todos loaded)
-    </button>
-  );
-}
-```
-
-`useSyncCollection` returns `undefined` until the store hydrates, so the `?? []` fallback prevents rendering an empty list during the brief boot window. Once `status.hydrated` is `true`, the IndexedDB cache has loaded and any pending mutations have been replayed.
-
+  The `?? []` fallback renders an empty list while data is unavailable. Hydration loads cached data; pending mutations may still be replaying.
 </Steps>
 
 ## What's next

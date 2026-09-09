@@ -4,8 +4,6 @@ sidebarTitle: "Concepts"
 description: "Understand Jobs, Phases, Checkpoints, PipelineStatus, StorageAdapter, SchedulerAdapter, RetryMode, and PhaseResult before writing your first pipeline."
 ---
 
-Before you wire up adapters or write phases, it helps to have a mental model of how the pieces fit together. This page defines each concept precisely so you can reason about what the library stores, when it stores it, and what happens when something goes wrong.
-
 ## Job
 
 A **job** is a single pipeline run identified by a `jobId` string you provide. Every piece of state — status, checkpoint, and log entries — is scoped to that ID. Two pipelines with different `jobId` values are completely independent, even if they share the same phase definitions and adapters.
@@ -41,7 +39,7 @@ type Checkpoint<TState = unknown> = {
 };
 ```
 
-The checkpoint is what makes crash recovery possible. If your process dies mid-job, the next `runPipeline` call reads the existing checkpoint and resumes from exactly that point — no work is duplicated up to the last save.
+The checkpoint is what makes crash recovery possible. If your process dies mid-job, the next `runPipeline` call loads the saved state and re-enters the checkpoint's phase. That phase may repeat work, including work before a mid-phase save, unless it uses the saved state to skip completed steps.
 
 ## PipelineStatus
 
@@ -115,7 +113,7 @@ type PhaseResult<TState> =
 
 ## How the pieces connect
 
-```
+```text
 runPipeline()
   └─ writes initial Checkpoint<TState> to StorageAdapter
   └─ calls SchedulerAdapter.scheduleAdvance(jobId, 0)

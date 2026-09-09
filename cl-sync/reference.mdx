@@ -209,7 +209,7 @@ interface FlushPendingMutationsResult {
 | `useSyncCollection(definition, args?)` | `<TRecord, TArgs>(definition, args?) => TRecord[] \| undefined` | Reactive record array for a collection slice. |
 | `useSyncRecord(collection, id?)` | `<TRecord>(collection: string, id?: string) => TRecord \| undefined` | Reactive single record. |
 | `useSyncMutation(definition)` | `<TArgs, TResult>(definition) => (args, clientMutationId?) => Promise<TResult \| undefined>` | Stable mutation callback. |
-| `useHydratedValue(localValue, serverValue)` | `<T>(local: T \| undefined, server: T \| undefined) => T \| undefined` | Returns server value, then local value once hydrated, then `undefined`. |
+| `useHydratedValue(localValue, serverValue)` | `<T>(local: T \| undefined, server: T \| undefined) => T \| undefined` | Returns the supplied server value; otherwise returns local data after hydration, or `undefined` before hydration. |
 
 See [Hooks](/cl-sync/react/hooks) for detailed usage of each hook.
 

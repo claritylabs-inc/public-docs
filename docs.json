@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "Clarity Labs Developer Docs",
+  "name": "Tools for Enlightenment developer docs",
   "description": "Open-source TypeScript SDKs for regulated AI agents, local-first sync, and durable workflow execution.",
   "theme": "luma",
   "colors": {
@@ -9,9 +9,9 @@
     "dark": "#737373"
   },
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg",
-    "href": "https://claritylabs.inc"
+    "light": "https://toolsforenlightenment.org/brand/tools-for-enlightenment-lockup.svg",
+    "dark": "https://toolsforenlightenment.org/brand/tools-for-enlightenment-lockup-light.svg",
+    "href": "https://toolsforenlightenment.org"
   },
   "favicon": "/logo/mark.svg",
   "appearance": {
@@ -45,8 +45,8 @@
   "navbar": {
     "links": [
       {
-        "label": "Clarity Labs",
-        "href": "https://claritylabs.inc"
+        "href": "https://toolsforenlightenment.org",
+        "label": "Tools for Enlightenment"
       }
     ],
     "primary": {
