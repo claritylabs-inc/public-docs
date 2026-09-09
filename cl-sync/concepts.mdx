@@ -4,8 +4,6 @@ sidebarTitle: "Concepts"
 description: "Understand how CL Sync scopes data per user, manages collections, runs optimistic mutations, and survives page reloads with a durable outbox."
 ---
 
-CL Sync is built around a small set of composable ideas. Once you understand how scope, collections, the store, and the outbox fit together, the rest of the API follows naturally. This page explains each concept and how they relate.
-
 ## Scope
 
 Every store is tied to a **scope** — a set of identifiers that uniquely describe the current session context:
@@ -19,7 +17,7 @@ interface SyncScope {
 }
 ```
 
-CL Sync calls `createScopeKey(scope)` to produce a composite string key in the form `"appId:env:userId:orgId"`. That key names the IndexedDB database for this scope. Changing any part of the scope — for example, switching `userId` after a logout/login — creates a completely separate IndexedDB scope. You never have to manually clear data when users switch.
+CL Sync calls `createScopeKey(scope)` to produce a composite string key in the form `"appId:env:userId:orgId"`. Records are scoped by app, environment, user, and organization within a database named by app and environment. Switching scope does not delete previously stored data.
 
 ```typescript
 import { createScopeKey } from "@claritylabs/cl-sync";

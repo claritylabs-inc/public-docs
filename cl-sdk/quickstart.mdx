@@ -22,7 +22,7 @@ npm install @claritylabs/cl-sdk pdf-lib zod
 
 ### Create provider callbacks
 
-CL SDK communicates with language models through plain async functions. Extraction needs only `generateObject`; query, application, PCE, and agent prompt workflows also need `generateText`. The example below uses the Anthropic SDK—swap the client for any provider you prefer.
+CL SDK communicates with language models through plain async functions. Extraction needs `generateObject`. Query and application workflows use both generation callbacks. PCE can use `generateObject` or run heuristic normalization without model calls. Building a system-prompt string does not call a model. The example below uses the Anthropic SDK—swap the client for any provider you prefer.
 
 ```typescript
 import Anthropic from "@anthropic-ai/sdk";

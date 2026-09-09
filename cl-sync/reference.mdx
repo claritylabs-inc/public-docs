@@ -31,7 +31,7 @@ This page is a concise index of every public export in `@claritylabs/cl-sync`. F
 </ResponseField>
 
 <ResponseField name="createScopeKey(scope)" type="string">
-  Derives a composite scope key string in the format `"appId:env:userId:orgId"`. Omitted optional fields produce an empty segment.
+  Derives a composite scope key string in the format `"appId:env:userId:orgId"`. Omitted `environment`, `userId`, and `orgId` default to `default`, `anonymous`, and `none`.
 
   ```typescript
   createScopeKey({ appId: "app", environment: "prod", userId: "u-1", orgId: "o-1" });
@@ -209,7 +209,7 @@ interface FlushPendingMutationsResult {
 | `useSyncCollection(definition, args?)` | `<TRecord, TArgs>(definition, args?) => TRecord[] \| undefined` | Reactive record array for a collection slice. |
 | `useSyncRecord(collection, id?)` | `<TRecord>(collection: string, id?: string) => TRecord \| undefined` | Reactive single record. |
 | `useSyncMutation(definition)` | `<TArgs, TResult>(definition) => (args, clientMutationId?) => Promise<TResult \| undefined>` | Stable mutation callback. |
-| `useHydratedValue(localValue, serverValue)` | `<T>(local: T \| undefined, server: T \| undefined) => T \| undefined` | Returns server value, then local value once hydrated, then `undefined`. |
+| `useHydratedValue(localValue, serverValue)` | `<T>(local: T \| undefined, server: T \| undefined) => T \| undefined` | Returns the supplied server value; otherwise returns local data after hydration, or `undefined` before hydration. |
 
 See [Hooks](/cl-sync/react/hooks) for detailed usage of each hook.
 
