@@ -37,7 +37,7 @@ const result = await extractor.extract(input, documentId?, options?);
 **`options`** (`ExtractOptions`):
 
 <ParamField body="sourceSpans" type="SourceSpan[]">
-  Pre-built source spans to use for this document. When provided, the extractor uses these spans directly instead of deriving spans from the PDF.
+  For PDF input, parse the document first and pass the resulting source spans. The extractor does not render PDFs. Pre-parsed Docling input can supply source evidence through its document.
 </ParamField>
 
 <ParamField body="coverageRecovery.enabled" type="boolean" default="false">

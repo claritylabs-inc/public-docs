@@ -146,7 +146,7 @@ function TodoList() {
 }
 ```
 
-`useSyncCollection` returns `undefined` until the store hydrates, so the `?? []` fallback prevents rendering an empty list during the brief boot window. Once `status.hydrated` is `true`, the IndexedDB cache has loaded and any pending mutations have been replayed.
+The `?? []` fallback renders an empty list while data is unavailable. Hydration loads cached data; pending mutations may still be replaying.
 
 </Steps>
 

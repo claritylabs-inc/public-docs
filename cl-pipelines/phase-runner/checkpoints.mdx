@@ -4,7 +4,7 @@ sidebarTitle: "Checkpoints"
 description: "Learn exactly when cl-pipelines writes, updates, and clears checkpoints, and how retryMode controls whether a resumed job loads or discards saved state."
 ---
 
-Checkpoints are the mechanism that makes `cl-pipelines` crash-safe. Every checkpoint is a small serialized record stored by your `StorageAdapter`. When a phase completes or explicitly saves progress, the library writes a new checkpoint. When the pipeline finishes, it clears it. At no point is in-progress state held only in memory — if your process dies, the data survives in storage.
+Checkpoints are the mechanism that makes `cl-pipelines` crash-safe. Every checkpoint is a small serialized record stored by your `StorageAdapter`. When a phase completes or explicitly saves progress, the library writes a new checkpoint. When the pipeline finishes, it clears it. Saved checkpoints survive process restarts when your storage adapter persists them. Work performed after the last checkpoint may run again on retry.
 
 ## Checkpoint shape
 

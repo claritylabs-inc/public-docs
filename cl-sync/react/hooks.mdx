@@ -132,7 +132,7 @@ function TodoList({ serverTodos }: { serverTodos?: Todo[] }) {
 }
 ```
 
-This pattern lets you pass server-rendered data as a prop for the initial paint, then seamlessly hand off to the local cache once it's ready.
+A supplied server value takes precedence. The hook uses local data after hydration only when no server value is supplied.
 
 ## `useSyncStore()`
 

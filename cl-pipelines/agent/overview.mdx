@@ -4,7 +4,7 @@ sidebarTitle: "Overview"
 description: "Use runAgent to run a crash-safe multi-turn LLM agent loop where each conversation turn is a durable pipeline phase with automatic checkpointing."
 ---
 
-`runAgent` is a convenience wrapper around `runPipeline` that drives a multi-turn LLM conversation. Each turn in the conversation is a single pipeline phase named `"turn"`. If the process crashes mid-conversation, the message history is preserved in the checkpoint and the agent resumes from the last completed turn — no messages are lost and no API calls are duplicated.
+`runAgent` is a convenience wrapper around `runPipeline` that drives a multi-turn LLM conversation. Each turn in the conversation is a single pipeline phase named `"turn"`. The agent saves message history between turns and resumes from the last checkpoint after a crash. Work performed after that checkpoint, including API calls and tool actions, may run again on retry.
 
 ## When to use runAgent
 
